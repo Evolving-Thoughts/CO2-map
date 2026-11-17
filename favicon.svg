@@ -1,0 +1,5 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 32 32">
+  <!-- A country drawn at the size of its emissions (filled) around its real outline (dashed). -->
+  <circle cx="16" cy="16" r="14" fill="#d9481c"/>
+  <circle cx="16" cy="16" r="7.5" fill="none" stroke="#ffffff" stroke-width="2.5" stroke-dasharray="3.9 2"/>
+</svg>

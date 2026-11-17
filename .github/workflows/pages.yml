@@ -1,0 +1,65 @@
+# Publishes the site to GitHub Pages: on every push to master, and when
+# the data workflow (data.yml) has committed newer data.
+#
+# The local script and stylesheet addresses in index.html end in "?v=...".
+# Here that is replaced with the id of the commit, so every release gets
+# fresh addresses and no browser mixes cached old files with new ones.
+#
+# Needs: repository Settings > Pages > Source set to "GitHub Actions".
+
+name: Publish site
+
+on:
+  push:
+    branches: [master]
+  workflow_dispatch:
+  workflow_call:
+
+permissions:
+  contents: read
+  pages: write
+  id-token: write
+
+concurrency:
+  group: pages
+  cancel-in-progress: true
+
+jobs:
+  publish:
+    runs-on: ubuntu-latest
+    environment:
+      name: github-pages
+      url: ${{ steps.deploy.outputs.page_url }}
+    steps:
+      # The branch as it is now, not the commit that started the run: when
+      # the data workflow calls this, its new commit must be included.
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ github.ref_name }}
+
+      - name: Collect the site and stamp the version
+        run: |
+          mkdir _site
+          cp -r index.html favicon.svg og-image.png css js vendor _site/
+
+          version="$(git rev-parse --short=8 HEAD)"
+          sed -i -E "s/\?v=[A-Za-z0-9]+\"/?v=${version}\"/g" _site/index.html
+
+          # Every script and stylesheet of the app must carry the new version.
+          # (Files in vendor/ have their version in the folder name.)
+          local_files=$(grep -cE '(src|href)="(js|css)/' _site/index.html)
+          stamped=$(grep -cE "(src|href)=\"(js|css)/[^\"]+\?v=${version}\"" _site/index.html)
+          echo "Version ${version}: ${stamped} of ${local_files} local files stamped"
+          if [ "$stamped" -eq 0 ] || [ "$stamped" -ne "$local_files" ]; then
+            echo "::error::Not every local script or stylesheet in index.html ends in ?v=..."
+            exit 1
+          fi
+
+      - uses: actions/configure-pages@v5
+
+      - uses: actions/upload-pages-artifact@v3
+        with:
+          path: _site
+
+      - id: deploy
+        uses: actions/deploy-pages@v4

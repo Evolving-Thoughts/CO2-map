@@ -1,1250 +1,304 @@
 /**
- * CO2 Budget Map - Main Application
- * 
- * An interactive world map that scales countries based on their CO2 emissions
- * relative to a fair per-capita budget.
- */
-
-// ============================================================================
-// Utility Helpers
-// ============================================================================
-
-/**
- * Escape HTML special characters to prevent XSS when inserting into innerHTML.
- */
-function escapeHtml(str) {
-  if (typeof str !== 'string') return String(str);
-  return str
-    .replace(/&/g, '&amp;')
-    .replace(/</g, '&lt;')
-    .replace(/>/g, '&gt;')
-    .replace(/"/g, '&quot;')
-    .replace(/'/g, '&#39;');
-}
-
-/**
- * Debounce a function so it only fires after a pause in calls.
- */
-function debounce(fn, delay) {
-  let timer;
-  return function (...args) {
-    clearTimeout(timer);
-    timer = setTimeout(() => fn.apply(this, args), delay);
-  };
-}
-
-// ============================================================================
-// Named Constants
-// ============================================================================
-
-const LEGEND_STEPS = [0.1, 0.2, 0.35, 0.5, 0.65, 0.8, 1.0, 1.25, 1.5, 1.75, 2.0, 2.5, 3.0, 4.0, 5.0, 7.0, 10.0, 12.0];
-const LEGEND_LABELS = new Map([[0.1, '0.1\u00d7'], [0.5, '0.5\u00d7'], [1.0, '1\u00d7'], [2.0, '2\u00d7'], [5.0, '5\u00d7'], [12.0, '12\u00d7']]);
-const VALID_METRICS = ['paris', 'paris2', 'co2', 'cons', 'hist'];
-const MIN_SCALE_RATIO = 0.01;
-const MERCATOR_LAT_LIMIT = 85;
-const DEBOUNCE_RENDER_MS = 60;
-
-// ============================================================================
-// Mercator Projection Helpers
-// ============================================================================
-
-const EARTH_RADIUS = 6378137;
-
-function toMercator(lng, lat) {
-  const x = EARTH_RADIUS * lng * Math.PI / 180;
-  // Clamp latitude to avoid infinity at poles
-  const clampedLat = Math.max(-MERCATOR_LAT_LIMIT, Math.min(MERCATOR_LAT_LIMIT, lat));
-  const clampedLatRad = clampedLat * Math.PI / 180;
-  const y = EARTH_RADIUS * Math.log(Math.tan(Math.PI / 4 + clampedLatRad / 2));
-  return [x, y];
-}
-
-function fromMercator(x, y) {
-  const lng = (x / EARTH_RADIUS) * 180 / Math.PI;
-  const lat = (2 * Math.atan(Math.exp(y / EARTH_RADIUS)) - Math.PI / 2) * 180 / Math.PI;
-  return [lng, lat];
-}
-
-// ============================================================================
-// Spherical Geometry Helpers (for globe scaling)
-// ============================================================================
-
-const DEG2RAD = Math.PI / 180;
-const RAD2DEG = 180 / Math.PI;
-
-/**
- * Angular distance (radians) between two points on the sphere via Haversine.
- */
-function geoDistance(lat1, lon1, lat2, lon2) {
-  const dLat = (lat2 - lat1) * DEG2RAD;
-  const dLon = (lon2 - lon1) * DEG2RAD;
-  const a = Math.sin(dLat / 2) ** 2 +
-    Math.cos(lat1 * DEG2RAD) * Math.cos(lat2 * DEG2RAD) * Math.sin(dLon / 2) ** 2;
-  return 2 * Math.atan2(Math.sqrt(a), Math.sqrt(1 - a));
-}
-
-/**
- * Initial bearing (radians) from point 1 to point 2.
- */
-function geoBearing(lat1, lon1, lat2, lon2) {
-  const phi1 = lat1 * DEG2RAD, phi2 = lat2 * DEG2RAD;
-  const dLambda = (lon2 - lon1) * DEG2RAD;
-  const y = Math.sin(dLambda) * Math.cos(phi2);
-  const x = Math.cos(phi1) * Math.sin(phi2) - Math.sin(phi1) * Math.cos(phi2) * Math.cos(dLambda);
-  return Math.atan2(y, x);
-}
-
-/**
- * Destination point given start, bearing (radians), and angular distance (radians).
- * Returns [lng, lat] in degrees.
- */
-function geoDestination(lat, lon, bearing, dist) {
-  const phi1 = lat * DEG2RAD;
-  const lambda1 = lon * DEG2RAD;
-  const sinDist = Math.sin(dist), cosDist = Math.cos(dist);
-  const sinPhi1 = Math.sin(phi1), cosPhi1 = Math.cos(phi1);
-
-  const phi2 = Math.asin(sinPhi1 * cosDist + cosPhi1 * sinDist * Math.cos(bearing));
-  const lambda2 = lambda1 + Math.atan2(
-    Math.sin(bearing) * sinDist * cosPhi1,
-    cosDist - sinPhi1 * Math.sin(phi2)
-  );
-  // Normalize longitude to [-180, 180]
-  let lng = lambda2 * RAD2DEG;
-  lng = ((lng + 540) % 360) - 180;
-  return [lng, phi2 * RAD2DEG];
-}
-
-/**
- * Geographic centroid of a polygon ring (simple average of [lng, lat] coordinates).
- */
-function ringCentroidGeo(ring) {
-  let sumLng = 0, sumLat = 0;
-  for (const coord of ring) {
-    sumLng += coord[0];
-    sumLat += coord[1];
-  }
-  return [sumLng / ring.length, sumLat / ring.length];
-}
-
-// ============================================================================
-// Antimeridian Fix (Russia, Fiji, etc.)
-// ============================================================================
-
-/**
- * Check if a polygon ring crosses the antimeridian (±180° longitude).
- */
-function doesRingCrossAntimeridian(ring) {
-  for (let i = 0; i < ring.length - 1; i++) {
-    if (Math.abs(ring[i][0] - ring[i + 1][0]) > 180) return true;
-  }
-  return false;
-}
-
-/**
- * For a ring that crosses the antimeridian, shift coordinates so they
- * are continuous. Uses the provided shiftEast flag to determine direction.
- */
-function normalizeRingAcrossAntimeridian(ring, shiftEast) {
-  if (!doesRingCrossAntimeridian(ring)) return ring;
-
-  if (shiftEast) {
-    // Shift western (negative) points by +360 to join eastern side
-    return ring.map(c => c[0] < -90 ? [c[0] + 360, c[1]] : c);
-  } else {
-    // Shift eastern (positive) points by -360 to join western side
-    return ring.map(c => c[0] > 90 ? [c[0] - 360, c[1]] : c);
-  }
-}
-
-/**
- * Determine the dominant hemisphere for an entire feature by counting
- * all coordinates across all polygons.
- */
-function featureDominantSide(geometry) {
-  const polygons = geometry.type === 'MultiPolygon'
-    ? geometry.coordinates : [geometry.coordinates];
-  let east = 0, west = 0;
-  for (const polygon of polygons) {
-    for (const coord of polygon[0]) {
-      if (coord[0] > 0) east++;
-      else if (coord[0] < 0) west++;
-    }
-  }
-  return east >= west; // true = shift toward east (shift negatives by +360)
-}
-
-/**
- * Fix all antimeridian-crossing polygons in a GeoJSON FeatureCollection.
- * Instead of splitting, shifts coordinates so each polygon is continuous.
- * The shift direction is determined per-feature so all sub-polygons
- * of a country (e.g. Russia) shift consistently.
- * Leaflet handles coordinates outside [-180, 180] correctly.
- */
-function fixAntimeridian(geojson) {
-  return {
-    ...geojson,
-    features: geojson.features.map(feature => {
-      const geom = feature.geometry;
-      if (!geom) return feature;
-
-      // Check if any ring crosses the antimeridian
-      const polygons = geom.type === 'MultiPolygon'
-        ? geom.coordinates
-        : geom.type === 'Polygon' ? [geom.coordinates] : null;
-      if (!polygons) return feature;
-
-      const hasCrossing = polygons.some(p => doesRingCrossAntimeridian(p[0]));
-      if (!hasCrossing) return feature;
-
-      // Determine shift direction from the whole feature
-      const shiftEast = featureDominantSide(geom);
-
-      if (geom.type === 'Polygon') {
-        return {
-          ...feature,
-          geometry: {
-            ...geom,
-            coordinates: geom.coordinates.map(r => normalizeRingAcrossAntimeridian(r, shiftEast))
-          }
-        };
-      }
-
-      if (geom.type === 'MultiPolygon') {
-        return {
-          ...feature,
-          geometry: {
-            ...geom,
-            coordinates: geom.coordinates.map(polygon =>
-              doesRingCrossAntimeridian(polygon[0])
-                ? polygon.map(r => normalizeRingAcrossAntimeridian(r, shiftEast))
-                : polygon
-            )
-          }
-        };
-      }
-
-      return feature;
-    })
-  };
-}
-
-// ============================================================================
-// Geometry Scaling
-// ============================================================================
-
-/**
- * Calculate the centroid of a polygon ring in Mercator coordinates.
- */
-function ringCentroidMercator(ring) {
-  let sumX = 0, sumY = 0, count = 0;
-  for (const coord of ring) {
-    const [mx, my] = toMercator(coord[0], coord[1]);
-    sumX += mx;
-    sumY += my;
-    count++;
-  }
-  return [sumX / count, sumY / count];
-}
-
-/**
- * Scale a single ring around a centroid in Mercator space.
- */
-function scaleRing(ring, centroid, scaleFactor) {
-  return ring.map(coord => {
-    const [mx, my] = toMercator(coord[0], coord[1]);
-    const newX = centroid[0] + scaleFactor * (mx - centroid[0]);
-    const newY = centroid[1] + scaleFactor * (my - centroid[1]);
-    const [newLng, newLat] = fromMercator(newX, newY);
-    // Clamp latitude so scaled polygons don't exceed Mercator bounds
-    return [newLng, Math.max(-MERCATOR_LAT_LIMIT, Math.min(MERCATOR_LAT_LIMIT, newLat))];
-  });
-}
-
-/**
- * Scale a GeoJSON feature's geometry by a given area ratio.
- * The linear scale factor is sqrt(ratio) since area ~ scale^2.
- * Each polygon is scaled from its own centroid (not from a single feature centroid)
- * to avoid extreme coordinate shifts for countries with far-flung territories
- * (e.g. US with Alaska/Hawaii, Russia with Chukotka, France with overseas).
- */
-function scaleFeature(feature, ratio) {
-  if (ratio === null || ratio === undefined || !isFinite(ratio)) return feature;
-  if (ratio <= 0) ratio = MIN_SCALE_RATIO; // prevent zero/negative
-
-  const scaleFactor = Math.sqrt(ratio);
-  const geometry = feature.geometry;
-
-  let newCoordinates;
-
-  if (geometry.type === 'Polygon') {
-    const centroid = ringCentroidMercator(geometry.coordinates[0]);
-    newCoordinates = geometry.coordinates.map(ring =>
-      scaleRing(ring, centroid, scaleFactor)
-    );
-  } else if (geometry.type === 'MultiPolygon') {
-    // Use the centroid of the largest polygon for all parts so that
-    // small coastal islands scale together with the main landmass,
-    // avoiding gaps between them.
-    let largestArea = -1;
-    let sharedCentroid = null;
-    for (const polygon of geometry.coordinates) {
-      let area = 0;
-      const ring = polygon[0];
-      for (let i = 0, n = ring.length; i < n; i++) {
-        const j = (i + 1) % n;
-        area += ring[i][0] * ring[j][1] - ring[j][0] * ring[i][1];
-      }
-      area = Math.abs(area);
-      if (area > largestArea) {
-        largestArea = area;
-        sharedCentroid = ringCentroidMercator(ring);
-      }
-    }
-    newCoordinates = geometry.coordinates.map(polygon => {
-      return polygon.map(ring => scaleRing(ring, sharedCentroid, scaleFactor));
-    });
-  } else {
-    return feature;
-  }
-
-  return {
-    ...feature,
-    geometry: {
-      ...geometry,
-      coordinates: newCoordinates
-    }
-  };
-}
-
-// ============================================================================
-// Spherical Geometry Scaling (for globe)
-// ============================================================================
-
-/**
- * Scale a single polygon ring on the sphere around a geographic centroid.
- * Inlines Haversine, bearing, and destination for performance.
- */
-function scaleRingSpherical(ring, centroidLat, centroidLon, scaleFactor) {
-  const cLatR = centroidLat * DEG2RAD;
-  const cLonR = centroidLon * DEG2RAD;
-  const sinCLat = Math.sin(cLatR);
-  const cosCLat = Math.cos(cLatR);
-
-  return ring.map(coord => {
-    const vLatR = coord[1] * DEG2RAD;
-    const vLonR = coord[0] * DEG2RAD;
-    const dLat = vLatR - cLatR;
-    const dLon = vLonR - cLonR;
-    const a = Math.sin(dLat * 0.5) ** 2 + cosCLat * Math.cos(vLatR) * Math.sin(dLon * 0.5) ** 2;
-    const dist = 2 * Math.atan2(Math.sqrt(a), Math.sqrt(1 - a));
-    if (dist < 1e-10) return coord;
-    const cosVLat = Math.cos(vLatR);
-    const bearing = Math.atan2(
-      Math.sin(dLon) * cosVLat,
-      cosCLat * Math.sin(vLatR) - sinCLat * cosVLat * Math.cos(dLon)
-    );
-    const newDist = dist * scaleFactor;
-    const sinD = Math.sin(newDist), cosD = Math.cos(newDist);
-    const phi2 = Math.asin(sinCLat * cosD + cosCLat * sinD * Math.cos(bearing));
-    const lambda2 = cLonR + Math.atan2(Math.sin(bearing) * sinD * cosCLat, cosD - sinCLat * Math.sin(phi2));
-    let lng = lambda2 * RAD2DEG;
-    lng = ((lng + 540) % 360) - 180;
-    return [lng, phi2 * RAD2DEG];
-  });
-}
-
-/**
- * Scale a GeoJSON feature's geometry on the sphere by a given area ratio.
- * Mirrors `scaleFeature` but uses great-circle math instead of Mercator projection.
- */
-function scaleFeatureSpherical(feature, ratio) {
-  if (ratio === null || ratio === undefined || !isFinite(ratio)) return feature;
-  if (ratio <= 0) ratio = MIN_SCALE_RATIO;
-
-  // Check cache
-  const cacheKey = `${feature.id}|${ratio}`;
-  const cached = _sphericalScaleCache.get(cacheKey);
-  if (cached) return cached;
-
-  const scaleFactor = Math.sqrt(ratio);
-  const geometry = feature.geometry;
-  let newCoordinates;
-
-  if (geometry.type === 'Polygon') {
-    const [cLng, cLat] = ringCentroidGeo(geometry.coordinates[0]);
-    newCoordinates = geometry.coordinates.map(ring =>
-      scaleRingSpherical(ring, cLat, cLng, scaleFactor)
-    );
-  } else if (geometry.type === 'MultiPolygon') {
-    // Two-phase scaling for MultiPolygon:
-    // Phase 1: Scale each sub-polygon around its OWN centroid (correct shape).
-    // Phase 2: Reposition each scaled sub-polygon so that inter-polygon
-    //          distances from the main (largest) centroid are also scaled,
-    //          preserving relative layout proportionally.
-
-    // Find centroid of the largest sub-polygon (shared reference point)
-    let largestArea = -1;
-    let mainCentroid = null;
-    for (const polygon of geometry.coordinates) {
-      let area = 0;
-      const ring = polygon[0];
-      for (let i = 0, n = ring.length; i < n; i++) {
-        const j = (i + 1) % n;
-        area += ring[i][0] * ring[j][1] - ring[j][0] * ring[i][1];
-      }
-      area = Math.abs(area);
-      if (area > largestArea) {
-        largestArea = area;
-        mainCentroid = ringCentroidGeo(ring);
-      }
-    }
-    const [mcLng, mcLat] = mainCentroid;
-
-    // Phase 1: scale each polygon from its own centroid
-    const scaledPolygons = geometry.coordinates.map(polygon => {
-      const [cLng, cLat] = ringCentroidGeo(polygon[0]);
-      return {
-        coords: polygon.map(ring => scaleRingSpherical(ring, cLat, cLng, scaleFactor)),
-        origCentroid: [cLng, cLat]
-      };
-    });
-
-    // Phase 2: reposition via 3D rotation matrix (fast rigid spherical translation).
-    // Instead of per-vertex geoDistance+geoBearing+geoDestination (16 trig ops each),
-    // compute one rotation matrix per sub-polygon, then 4 trig ops per vertex.
-    newCoordinates = scaledPolygons.map(({ coords, origCentroid }) => {
-      const [ocLng, ocLat] = origCentroid;
-      const dist = geoDistance(mcLat, mcLng, ocLat, ocLng);
-      if (dist < 1e-10) return coords; // this IS the main polygon, no shift needed
-      const bearing = geoBearing(mcLat, mcLng, ocLat, ocLng);
-      const [ncLng, ncLat] = geoDestination(mcLat, mcLng, bearing, dist * scaleFactor);
-
-      // Build rotation matrix from old centroid to new centroid on unit sphere
-      const oLatR = ocLat * DEG2RAD, oLonR = ocLng * DEG2RAD;
-      const nLatR = ncLat * DEG2RAD, nLonR = ncLng * DEG2RAD;
-      // Old centroid as 3D unit vector
-      const ox = Math.cos(oLatR) * Math.cos(oLonR);
-      const oy = Math.cos(oLatR) * Math.sin(oLonR);
-      const oz = Math.sin(oLatR);
-      // New centroid as 3D unit vector
-      const nx = Math.cos(nLatR) * Math.cos(nLonR);
-      const ny = Math.cos(nLatR) * Math.sin(nLonR);
-      const nz = Math.sin(nLatR);
-      // Rotation axis = cross(old, new), angle = acos(dot(old, new))
-      let ax = oy * nz - oz * ny;
-      let ay = oz * nx - ox * nz;
-      let az = ox * ny - oy * nx;
-      const axLen = Math.sqrt(ax * ax + ay * ay + az * az);
-      if (axLen < 1e-12) return coords; // centroids coincide after scaling
-      ax /= axLen; ay /= axLen; az /= axLen;
-      const cosA = ox * nx + oy * ny + oz * nz;
-      const sinA = axLen;
-      // Rodrigues' rotation matrix components
-      const C = 1 - cosA;
-      const r00 = cosA + ax * ax * C, r01 = ax * ay * C - az * sinA, r02 = ax * az * C + ay * sinA;
-      const r10 = ay * ax * C + az * sinA, r11 = cosA + ay * ay * C, r12 = ay * az * C - ax * sinA;
-      const r20 = az * ax * C - ay * sinA, r21 = az * ay * C + ax * sinA, r22 = cosA + az * az * C;
-
-      return coords.map(ring =>
-        ring.map(coord => {
-          const latR = coord[1] * DEG2RAD;
-          const lonR = coord[0] * DEG2RAD;
-          const cosLat = Math.cos(latR);
-          const px = cosLat * Math.cos(lonR);
-          const py = cosLat * Math.sin(lonR);
-          const pz = Math.sin(latR);
-          // Apply rotation
-          const rx = r00 * px + r01 * py + r02 * pz;
-          const ry = r10 * px + r11 * py + r12 * pz;
-          const rz = r20 * px + r21 * py + r22 * pz;
-          // Back to lat/lng
-          let lng = Math.atan2(ry, rx) * RAD2DEG;
-          lng = ((lng + 540) % 360) - 180;
-          return [lng, Math.asin(Math.max(-1, Math.min(1, rz))) * RAD2DEG];
-        })
-      );
-    });
-  } else {
-    return feature;
-  }
-
-  const result = {
-    ...feature,
-    geometry: {
-      ...geometry,
-      coordinates: newCoordinates
-    }
-  };
-  _sphericalScaleCache.set(cacheKey, result);
-  return result;
-}
-
-// ============================================================================
-// Color Scale
-// ============================================================================
-
-/**
- * Linearly interpolate between color stops defined as [value, r, g, b].
- */
-function interpolateStops(value, stops) {
-  for (let i = 0; i < stops.length - 1; i++) {
-    const [v0, r0, g0, b0] = stops[i];
-    const [v1, r1, g1, b1] = stops[i + 1];
-    if (value <= v1) {
-      const t = (value - v0) / (v1 - v0);
-      return `rgb(${Math.round(r0 + (r1 - r0) * t)}, ${Math.round(g0 + (g1 - g0) * t)}, ${Math.round(b0 + (b1 - b0) * t)})`;
-    }
-  }
-  const last = stops[stops.length - 1];
-  return `rgb(${last[1]}, ${last[2]}, ${last[3]})`;
-}
-
-/**
- * Get color for a budget ratio using a multi-stop piecewise scale.
+ * CO2 Budget Map — application
  *
- * More color stops in the 0.5–3× range give better differentiation
- * for countries that cluster near the budget line (e.g. Europe).
- * Range extends to 12× before saturating.
+ * An interactive world map that colors and resizes countries by their
+ * CO₂ emissions relative to a fair per-capita budget.
  *
- * Default: Green → Yellow → Orange → Red → Dark Red
- * Colorblind: Blue → White → Orange → Dark Brown (ColorBrewer safe)
+ * This file starts the app and is the only place that changes the state
+ * (js/state.js). Files, in loading order:
+ *   i18n.js     texts (English, German) and number formatting
+ *   co2data.js  generated data (run generate_data.py to refresh)
+ *   config.js   hand-maintained territories and budget assumptions
+ *   metrics.js  calculations
+ *   geo.js      geometry: projections and resizing
+ *   state.js    shared state, color scale, tooltip text
+ *   map.js      flat map (Leaflet)
+ *   globe.js    3D globe (globe.gl, prepared in the background)
+ *   ui.js       header, key, ranking, country panel, method dialog
+ *   app.js      startup, controls, shareable URL, language
  */
-function getRatioColor(ratio) {
-  if (ratio === null || ratio === undefined || !isFinite(ratio)) return '#888888';
-  
-  const r = Math.max(0.05, Math.min(ratio, 12));
 
-  if (colorblindMode) {
-    return interpolateStops(r, [
-      [0.0,  33, 102, 172],   // deep blue
-      [0.5, 103, 169, 207],   // medium blue
-      [1.0, 245, 245, 245],   // near-white
-      [1.5, 253, 208, 162],   // light peach
-      [2.0, 245, 165,  80],   // orange
-      [3.0, 215, 120,  30],   // dark orange
-      [5.0, 179,  88,   6],   // brown
-      [8.0, 127,  59,   8],   // dark brown
-      [12.0, 84,  36,   5],   // very dark brown
-    ]);
-  }
+// Country shapes: Natural Earth 1:50m, exact package version.
 
-  // Default: diverging green → yellow → red → burgundy
-  return interpolateStops(r, [
-    [0.0,  22, 160,  90],    // deep green
-    [0.5,  80, 190, 110],    // medium green
-    [1.0, 230, 210,  60],    // yellow (exactly at budget)
-    [1.5, 245, 170,  50],    // light orange
-    [2.0, 240, 130,  40],    // orange
-    [3.0, 220,  70,  30],    // red-orange
-    [5.0, 200,  20,  20],    // red
-    [8.0, 150,  10,  30],    // dark red
-    [12.0,100,   5,  20],    // burgundy
-  ]);
+// ============================================================================
+// Shareable URL
+// ============================================================================
+//
+// The view lives in the URL hash, so a copied link opens what the sender
+// saw: #m=paris2&c=276&scaled=1&view=globe&cb=1. Defaults are left out.
+// The language is not part of the link; recipients get their own.
+
+function readUrlState() {
+  const params = new URLSearchParams(location.hash.replace(/^#/, ''));
+  const metric = params.get('m');
+  return {
+    metric: METRICS.includes(metric) ? metric : 'paris',
+    scaled: params.get('scaled') === '1',
+    colorblind: params.get('cb') === '1',
+    globeView: params.get('view') === 'globe',
+    selectedId: params.get('c') || null,
+  };
 }
 
-// ============================================================================
-// Application State
-// ============================================================================
-
-let map;
-let geojsonData = null;
-let globeGeojsonData = null; // Original GeoJSON (no antimeridian fix) for globe
-let countriesLayer = null;
-let scaledLayer = null;
-let currentMetric = 'paris';
-let isScaled = false;
-let colorblindMode = false;
-let selectedCountryId = null;
-let selectedScaled = false;
-let highlightLayer = null;
-
-// Cache for spherical scaling results: key = `${featureId}|${ratio}`, value = scaled feature
-const _sphericalScaleCache = new Map();
-function clearSphericalScaleCache() { _sphericalScaleCache.clear(); }
-let selectionOutlineLayer = null;
-let rankingOpen = false;
-let globe = null;
-let isGlobeView = false;
-let hoveredPolygon = null;
-
-// ============================================================================
-// Map Initialization
-// ============================================================================
-
-async function initApp() {
-  // Create Leaflet map
-  map = L.map('map', {
-    center: [20, 0],
-    zoom: 3,
-    minZoom: 2,
-    maxZoom: 8,
-    zoomControl: false,
-    worldCopyJump: true
-  });
-
-  // Add zoom control to bottom-right
-  L.control.zoom({ position: 'bottomright' }).addTo(map);
-
-  // CartoDB Positron (light minimal tiles — no labels)
-  L.tileLayer('https://{s}.basemaps.cartocdn.com/light_nolabels/{z}/{x}/{y}{r}.png', {
-    attribution: '&copy; <a href="https://www.openstreetmap.org/copyright">OpenStreetMap</a> contributors &copy; <a href="https://carto.com/">CARTO</a>',
-    subdomains: 'abcd',
-    maxZoom: 20
-  }).addTo(map);
-
-  // Add labels on top (separate layer so they appear above our polygons)
-  L.tileLayer('https://{s}.basemaps.cartocdn.com/light_only_labels/{z}/{x}/{y}{r}.png', {
-    subdomains: 'abcd',
-    maxZoom: 20,
-    pane: 'overlayPane'
-  }).addTo(map);
-
-  // Show loading state
-  showLoading(true);
-
+function writeUrlState() {
+  const params = new URLSearchParams();
+  if (state.metric !== 'paris') params.set('m', state.metric);
+  if (state.selectedId != null) params.set('c', state.selectedId);
+  if (state.scaled) params.set('scaled', '1');
+  if (state.globeView) params.set('view', 'globe');
+  if (state.colorblind) params.set('cb', '1');
+  const hash = params.toString();
+  const url = location.pathname + location.search + (hash ? `#${hash}` : '');
   try {
-    // Load country boundaries
-    await loadGeoJSON();
-    // Render initial view
-    renderCountries();
-    // Set up event listeners
-    setupControls();
-  } catch (error) {
-    console.error('Failed to initialize:', error);
-    document.getElementById('loading').innerHTML =
-      `<p style="color:#e94560">${t('loadError')}</p>`;
-  }
-
-  showLoading(false);
+    history.replaceState(null, '', url);
+  } catch (e) { /* e.g. file:// in some browsers: the app works without it */ }
 }
 
-/**
- * Load GeoJSON country boundaries from CDN
- */
-async function loadGeoJSON() {
-  const response = await fetch(
-    'https://cdn.jsdelivr.net/npm/world-atlas@2/countries-50m.json'
-  );
-  if (!response.ok) throw new Error('Failed to fetch map data');
-  
-  const topology = await response.json();
-  geojsonData = topojson.feature(topology, topology.objects.countries);
-
-  // Assign id from properties.name for features without a numeric id (e.g. Somaliland, Kosovo)
-  geojsonData.features.forEach(f => {
-    if (f.id == null && f.properties && f.properties.name) {
-      f.id = f.properties.name;
-    }
-  });
-
-  // Store original GeoJSON for globe (before antimeridian fix)
-  globeGeojsonData = JSON.parse(JSON.stringify(geojsonData));
-
-  // Fix Russia, Fiji etc. — split polygons that cross the antimeridian
-  geojsonData = fixAntimeridian(geojsonData);
-  
-  // Also extract borders for nice outlines
-  // geojsonData.borders = topojson.mesh(topology, topology.objects.countries, (a, b) => a !== b);
-}
-
-// ============================================================================
-// Globe Initialization & Rendering
-// ============================================================================
-
-function initGlobe() {
-  const container = document.getElementById('globe');
-  globe = new Globe(container, { animateIn: false })
-    .globeTileEngineUrl((x, y, l) => `https://a.basemaps.cartocdn.com/light_nolabels/${l}/${x}/${y}.png`)
-    .backgroundColor('#f0f0f0')
-    .showAtmosphere(true)
-    .atmosphereColor('lightskyblue')
-    .atmosphereAltitude(0.15)
-    .width(container.clientWidth)
-    .height(container.clientHeight)
-    .pointOfView({ lat: 20, lng: 0, altitude: 2.5 })
-    .onGlobeClick(() => deselectCountry())
-    .onPolygonClick((polygon) => {
-      if (polygon) selectCountry(polygon.id);
-    })
-    .onPolygonHover((polygon) => {
-      hoveredPolygon = polygon;
-      if (globe) {
-        globe.polygonCapColor(d => getGlobePolygonColor(d));
-      }
-    })
-    .polygonLabel(feature => {
-      return buildTooltipHtml(feature);
-    })
-    .polygonsTransitionDuration(800);
-
-  // Handle window resize for globe
-  window.addEventListener('resize', () => {
-    if (globe && isGlobeView) {
-      const c = document.getElementById('globe');
-      globe.width(c.clientWidth).height(c.clientHeight);
-    }
-  });
-}
-
-function buildTooltipHtml(feature) {
-  const country = CO2_DATA[feature.id];
-  if (country) {
-    const ratio = getBudgetRatio(feature.id, currentMetric);
-    const ratioText = ratio ? `${ratio.toFixed(2)}\u00d7` : 'N/A';
-    let perCapita, unit;
-    if (currentMetric === 'hist') {
-      perCapita = country.hist != null ? (country.hist * 1000) / country.pop : null;
-      unit = t('unitTCumulCap');
-    } else if (currentMetric === 'cons' || currentMetric === 'paris' || currentMetric === 'paris2') {
-      const val = country.cons != null ? country.cons : country.co2;
-      perCapita = val != null ? val / country.pop : null;
-      unit = t('unitTCO2Cap');
-    } else {
-      perCapita = country.co2 != null ? country.co2 / country.pop : null;
-      unit = t('unitTCO2Cap');
-    }
-    const pcText = perCapita != null ? formatCompact(perCapita, 1) : 'N/A';
-    return `<div style="font-family:Inter,sans-serif;font-size:13px;padding:4px 8px;line-height:1.5">
-      <strong>${escapeHtml(tn(country.name))}</strong><br>
-      ${escapeHtml(pcText)} ${escapeHtml(unit)}<br>
-      ${escapeHtml(t('budgetRatioLabel'))}: ${escapeHtml(ratioText)}
-    </div>`;
-  } else if (TERRITORY_NAMES[feature.id]) {
-    const name = escapeHtml(tn(TERRITORY_NAMES[feature.id]));
-    const parent = TERRITORY_PARENTS[feature.id];
-    const note = parent
-      ? escapeHtml(t('tooltipDataUnder')(tn(parent)))
-      : escapeHtml(t('tooltipNoData'));
-    return `<div style="font-family:Inter,sans-serif;font-size:13px;padding:4px 8px;line-height:1.5">
-      <strong>${name}</strong><br>${note}
-    </div>`;
-  }
-  return '';
-}
-
-function getGlobePolygonColor(feature) {
-  const ratio = getBudgetRatio(feature.id, currentMetric);
-  const isHovered = feature === hoveredPolygon;
-  const isSelected = feature.id === selectedCountryId;
-  if (isHovered) return 'steelblue';
-  if (isSelected) return getRatioColor(ratio);
-  return getRatioColor(ratio);
-}
-
-function getGlobePolygonAltitude(feature) {
-  // Small constant altitude to avoid z-fighting with globe tile surface
-  return 0.01;
-}
-
-function renderGlobe() {
-  if (!globe || !globeGeojsonData) return;
-
-  // In globe budget view (isScaled), use height extrusion instead of area scaling.
-  // For individual selected+scaled countries, still use area scaling.
-  const useHeightMode = isScaled;
-
-  const features = globeGeojsonData.features.map(feature => {
-    const ratio = getBudgetRatio(feature.id, currentMetric);
-    // Only area-scale when a single country is selected+scaled (not in global height mode)
-    if (!useHeightMode && ratio !== null && selectedScaled && feature.id === selectedCountryId) {
-      return scaleFeatureSpherical(feature, ratio);
-    }
-    return feature;
-  });
-
-  // Build outline paths for ghost (dashed) and selection (solid white)
-  // Only show ghost/selection outlines for individual selected+scaled (not height mode)
-  const outlinePaths = [];
-  if (selectedCountryId && selectedScaled && !useHeightMode) {
-    const ratio = getBudgetRatio(selectedCountryId, currentMetric);
-    if (ratio !== null && ratio !== 1) {
-      // Ghost dashed outline: original (unscaled) borders
-      const originalFeature = globeGeojsonData.features.find(f => f.id === selectedCountryId);
-      if (originalFeature) {
-        const geom = originalFeature.geometry;
-        const polygons = geom.type === 'Polygon' ? [geom.coordinates]
-          : geom.type === 'MultiPolygon' ? geom.coordinates : [];
-        polygons.forEach(polygon => {
-          polygon.forEach(ring => {
-            outlinePaths.push({
-              points: ring.map(c => ({ lat: c[1], lng: c[0] })),
-              type: 'ghost'
-            });
-          });
-        });
-      }
-      // White solid outline: scaled borders
-      const scaledFeature = features.find(f => f.id === selectedCountryId);
-      if (scaledFeature) {
-        const geom = scaledFeature.geometry;
-        const polygons = geom.type === 'Polygon' ? [geom.coordinates]
-          : geom.type === 'MultiPolygon' ? geom.coordinates : [];
-        polygons.forEach(polygon => {
-          polygon.forEach(ring => {
-            outlinePaths.push({
-              points: ring.map(c => ({ lat: c[1], lng: c[0] })),
-              type: 'selection'
-            });
-          });
-        });
-      }
-    }
-  }
-
-  globe
-    .polygonsData(features)
-    .polygonGeoJsonGeometry(f => f.geometry)
-    .polygonCapColor(f => getGlobePolygonColor(f))
-    .polygonSideColor(f => {
-      if (useHeightMode) {
-        // Slightly darker side color for depth effect in height mode
-        const ratio = getBudgetRatio(f.id, currentMetric);
-        return getRatioColor(ratio != null ? ratio : 0);
-      }
-      return getGlobePolygonColor(f);
-    })
-    .polygonStrokeColor(() => '#333333')
-    .polygonAltitude(f => {
-      if (useHeightMode) {
-        // Height proportional to budget ratio (clamped for visual clarity)
-        const ratio = getBudgetRatio(f.id, currentMetric);
-        if (ratio === null || !isFinite(ratio)) return 0.01;
-        // Scale: 1x = 0.02, higher ratios get taller, max ~0.25
-        return Math.max(0.005, Math.min(ratio * 0.02, 0.25));
-      }
-      // Area-scaling mode: selected+scaled country slightly above neighbors
-      const isThisScaled = (selectedScaled && f.id === selectedCountryId)
-        && getBudgetRatio(f.id, currentMetric) !== null;
-      return isThisScaled ? 0.02 : 0.01;
-    })
-    // Ghost (dashed) & selection (solid white) outline paths
-    .pathsData(outlinePaths)
-    .pathPoints('points')
-    .pathPointLat(p => p.lat)
-    .pathPointLng(p => p.lng)
-    .pathPointAlt(d => d.type === 'ghost' ? 0.025 : 0.021)
-    .pathColor(d => d.type === 'ghost' ? 'rgba(0, 0, 0, 0.8)' : 'rgba(255, 255, 255, 1)')
-    .pathStroke(d => d.type === 'ghost' ? 0.3 : 0.5)
-    .pathDashLength(d => d.type === 'ghost' ? 0.005 : 1)
-    .pathDashGap(d => d.type === 'ghost' ? 0.003 : 0)
-    .pathDashAnimateTime(0)
-    .pathTransitionDuration(0)
-    .polygonsTransitionDuration(selectedScaled || isScaled ? 0 : 800);
-}
-
-// ============================================================================
-// Projection Toggle
-// ============================================================================
-
-function switchProjection() {
-  isGlobeView = !isGlobeView;
-  const mapEl = document.getElementById('map');
-  const globeEl = document.getElementById('globe');
-  const btn = document.getElementById('projection-toggle');
-
-  if (isGlobeView) {
-    mapEl.style.display = 'none';
-    globeEl.style.display = 'block';
-    btn.textContent = t('mapView');
-    btn.classList.add('active');
-    btn.title = t('mapView');
-    if (!globe) initGlobe();
-    const c = document.getElementById('globe');
-    globe.width(c.clientWidth).height(c.clientHeight);
-    renderGlobe();
-  } else {
-    globeEl.style.display = 'none';
-    mapEl.style.display = 'block';
-    btn.textContent = t('globeView');
-    btn.classList.remove('active');
-    btn.title = t('globeView');
-    map.invalidateSize();
-    renderCountries();
-  }
-}
-
-function getFeatureCentroid(feature) {
-  const geom = feature.geometry;
-  let coords;
-  if (geom.type === 'Polygon') {
-    coords = geom.coordinates[0];
-  } else if (geom.type === 'MultiPolygon') {
-    // Use largest polygon
-    let maxLen = 0;
-    for (const poly of geom.coordinates) {
-      if (poly[0].length > maxLen) {
-        maxLen = poly[0].length;
-        coords = poly[0];
-      }
-    }
-  }
-  if (!coords || coords.length === 0) return null;
-  let sumLat = 0, sumLng = 0;
-  for (const c of coords) {
-    sumLng += c[0];
-    sumLat += c[1];
-  }
-  return { lat: sumLat / coords.length, lng: sumLng / coords.length };
+function isKnownPlace(id) {
+  return id != null && findFeature(id) != null;
 }
 
 // ============================================================================
 // Rendering
 // ============================================================================
 
-function renderCountries() {
-  // Delegate to globe renderer if in globe view
-  if (isGlobeView) { renderGlobe(); return; }
-
-  // Remove existing layers
-  if (countriesLayer) map.removeLayer(countriesLayer);
-  if (scaledLayer) map.removeLayer(scaledLayer);
-  if (highlightLayer) map.removeLayer(highlightLayer);
-  if (selectionOutlineLayer) map.removeLayer(selectionOutlineLayer);
-
-  const features = geojsonData.features.map(feature => {
-    const ratio = getBudgetRatio(feature.id, currentMetric);
-    if (ratio !== null && (isScaled || (selectedScaled && feature.id === selectedCountryId))) {
-      return scaleFeature(feature, ratio);
-    }
-    return feature;
-  });
-
-  const scaledGeoJSON = { type: 'FeatureCollection', features };
-
-  scaledLayer = L.geoJSON(scaledGeoJSON, {
-    style: feature => {
-      const ratio = getBudgetRatio(feature.id, currentMetric);
-      const isSelected = feature.id === selectedCountryId;
-      return {
-        fillColor: getRatioColor(ratio),
-        fillOpacity: isSelected ? 0.9 : 0.75,
-        color: '#333333',
-        weight: 0.5,
-        opacity: 0.6
-      };
-    },
-    onEachFeature: (feature, layer) => {
-      // Tooltip
-      const country = CO2_DATA[feature.id];
-      if (country) {
-        const ratio = getBudgetRatio(feature.id, currentMetric);
-        const ratioText = ratio ? `${ratio.toFixed(2)}×` : 'N/A';
-        let perCapita, unit;
-        if (currentMetric === 'hist') {
-          perCapita = country.hist != null ? (country.hist * 1000) / country.pop : null;
-          unit = t('unitTCumulCap');
-        } else if (currentMetric === 'cons' || currentMetric === 'paris' || currentMetric === 'paris2') {
-          const val = country.cons != null ? country.cons : country.co2;
-          perCapita = val != null ? val / country.pop : null;
-          unit = t('unitTCO2Cap');
-        } else {
-          perCapita = country.co2 != null ? country.co2 / country.pop : null;
-          unit = t('unitTCO2Cap');
-        }
-        const pcText = perCapita != null ? formatCompact(perCapita, 1) : 'N/A';
-        layer.bindTooltip(
-          `<strong>${escapeHtml(tn(country.name))}</strong><br>` +
-          `${escapeHtml(pcText)} ${escapeHtml(unit)}<br>` +
-          `${escapeHtml(t('budgetRatioLabel'))}: ${escapeHtml(ratioText)}`,
-          { sticky: true, className: 'country-tooltip' }
-        );
-      } else if (TERRITORY_NAMES[feature.id]) {
-        const name = escapeHtml(tn(TERRITORY_NAMES[feature.id]));
-        const parent = TERRITORY_PARENTS[feature.id];
-        const note = parent
-          ? escapeHtml(t('tooltipDataUnder')(tn(parent)))
-          : escapeHtml(t('tooltipNoData'));
-        layer.bindTooltip(
-          `<strong>${name}</strong><br>${note}`,
-          { sticky: true, className: 'country-tooltip' }
-        );
-      }
-
-      // Click handler
-      layer.on('click', () => selectCountry(feature.id));
-    }
-  }).addTo(map);
-
-  // Ghost outline: show original borders when a country is scaled
-  if (selectedCountryId && selectedScaled) {
-    const ratio = getBudgetRatio(selectedCountryId, currentMetric);
-    if (ratio !== null && ratio !== 1) {
-      const originalFeature = geojsonData.features.find(f => f.id === selectedCountryId);
-      if (originalFeature) {
-        highlightLayer = L.geoJSON(originalFeature, {
-          style: {
-            fillColor: getRatioColor(ratio),
-            fillOpacity: 0.15,
-            color: '#000000',
-            weight: 2,
-            opacity: 0.7,
-            dashArray: '6,4'
-          },
-          interactive: false
-        }).addTo(map);
-      }
-    }
-
-    // White outline on the scaled geometry so all parts are visibly outlined
-    const scaledFeature = features.find(f => f.id === selectedCountryId);
-    if (scaledFeature) {
-      selectionOutlineLayer = L.geoJSON(scaledFeature, {
-        style: {
-          fill: false,
-          color: '#ffffff',
-          weight: 2.5,
-          opacity: 1
-        },
-        interactive: false
-      }).addTo(map);
-    }
-  }
+function renderView() {
+  if (state.globeView) renderGlobe();
+  else renderMap();
 }
 
-function selectCountry(isoCode) {
-  selectedCountryId = isoCode;
-  selectedScaled = true;
-  renderCountries();
-  showInfoPanel(isoCode);
-  if (rankingOpen) buildRanking();
+/**
+ * Redraw everything that depends on the metric, the colors or the language.
+ */
+function renderAll() {
+  renderHeader();
+  renderKey();
+  renderView();
+  if (state.rankingOpen) renderRanking();
+  if (state.selectedId != null) renderInfoPanel();
+}
+
+// ============================================================================
+// Actions (the only code that changes the state)
+// ============================================================================
+
+function setMetric(metric) {
+  if (!METRICS.includes(metric) || metric === state.metric) return;
+  state.metric = metric;
+  renderAll();
+  writeUrlState();
+}
+
+function setScaled(scaled) {
+  state.scaled = scaled;
+  state.selectedScaled = false;
+  renderHeader();
+  renderKey();
+  renderView();
+  if (state.selectedId != null) renderInfoPanel();
+  writeUrlState();
+}
+
+function setColorblind(on) {
+  state.colorblind = on;
+  document.body.classList.toggle('colorblind', on);
+  renderAll();
+  writeUrlState();
+}
+
+/**
+ * @param {string} id
+ * @param {{pan?: boolean, focus?: boolean}} [options]
+ *   pan: move the map to the country; focus: move keyboard focus to the panel
+ */
+function selectCountry(id, options = {}) {
+  // Taken before the country sheet changes the map's size on a phone.
+  const viewBefore = state.globeView ? undefined : viewToReturnTo();
+  state.selectedId = id;
+  state.selectedScaled = true;
+  renderView();
+  renderInfoPanel();
+  markRankingSelection(true);
+  writeUrlState();
+
+  if (isSmallScreen()) {
+    // Phones: the country panel is a bottom sheet and needs the room.
+    // The map ends above the sheet, so bring the country into what is
+    // left; the view from before comes back when the sheet closes.
+    setHeaderCollapsed(true);
+    if (state.rankingOpen) setRankingOpen(false);
+    syncViewSize();
+    if (state.globeView) panGlobeToCountry(id);
+    else panMapToCountry(id, viewBefore);
+  } else {
+    // Bring the country into the middle. From the ranking or a link the
+    // map also zooms to it; a click on the map keeps the zoom. The map
+    // stays there when the country is closed.
+    syncViewSize();
+    if (state.globeView) panGlobeToCountry(id);
+    else panMapToCountry(id, undefined, { zoomIn: !!options.pan });
+  }
+  if (options.focus) focusInfoPanel();
+}
+
+/**
+ * Tell the renderers that their container changed size (the country
+ * sheet opened, closed or was collapsed on a phone).
+ */
+function syncViewSize() {
+  refreshMapSize({ pan: false });
+  resizeGlobe();
 }
 
 function deselectCountry() {
-  selectedCountryId = null;
-  selectedScaled = false;
-  hoveredPolygon = null;
-  renderCountries();
+  if (state.selectedId == null) return;
+  const panelHadFocus = $('info-panel').contains(document.activeElement);
+  const previousId = state.selectedId;
+  state.selectedId = null;
+  state.selectedScaled = false;
+  renderView();
   hideInfoPanel();
-  if (rankingOpen) buildRanking();
+  markRankingSelection(false);
+  writeUrlState();
+  syncViewSize();
+  if (state.globeView) forgetReturnView();
+  else restoreOverviewIfUntouched();
+
+  if (panelHadFocus) {
+    // Hand the keyboard back to where the selection came from.
+    const origin = state.rankingOpen
+      ? $('ranking-list').querySelector(`.ranking-item[data-id="${CSS.escape(previousId)}"]`)
+      : null;
+    (origin || $('ranking-toggle')).focus();
+  }
 }
 
 function toggleSelectedScale() {
-  selectedScaled = !selectedScaled;
-  renderCountries();
-  if (selectedCountryId) showInfoPanel(selectedCountryId);
+  state.selectedScaled = !state.selectedScaled;
+  renderView();
+  renderInfoPanel();
+  if (!state.globeView) revealCountryOnMap(state.selectedId);
+  const button = $('info-panel').querySelector('[data-action="resize"]');
+  if (button) button.focus();
+}
+
+function panToCountry(id) {
+  if (state.globeView) panGlobeToCountry(id);
+  else panMapToCountry(id);
+}
+
+/**
+ * Switch between the flat map and the globe. The globe is normally ready
+ * by now (it is prepared in the background); the loading message only
+ * appears if it is not. If the globe cannot be loaded, the flat map stays.
+ */
+async function setGlobeView(on) {
+  if (on === state.globeView) return;
+
+  if (on && !globeIsReady) {
+    globeUrgent = true;
+    const slow = setTimeout(() => showLoading(true, t('globeLoading')), 200);
+    try {
+      await prepareGlobe();
+    } catch (error) {
+      console.error('Globe unavailable:', error);
+      showToast(t('globeError'));
+      return;
+    } finally {
+      clearTimeout(slow);
+      showLoading(false);
+    }
+  }
+
+  state.globeView = on;
+  $('map').style.display = on ? 'none' : 'block';
+  $('globe').style.display = on ? 'block' : 'none';
+  renderHeader();
+  renderKey();
+  setGlobeVisible(on);
+
+  if (on) {
+    renderGlobe();
+    if (state.selectedId != null) panGlobeToCountry(state.selectedId);
+  } else {
+    refreshMapSize();
+    renderMap();
+  }
+  if (state.selectedId != null) renderInfoPanel();
+  writeUrlState();
+}
+
+function setLanguage(lang) {
+  if (!TRANSLATIONS[lang] || lang === currentLang) return;
+  currentLang = lang;
+  try {
+    localStorage.setItem(LANG_STORAGE_KEY, lang);
+  } catch (e) { /* private mode: the choice lasts for this visit */ }
+  applyLanguage();
+  renderAll();
+  if ($('about').open) renderAbout();
+}
+
+function applyLanguage() {
+  document.documentElement.lang = currentLang;
+  document.title = t('pageTitle');
+  applyStaticTranslations();
 }
 
 // ============================================================================
-// Info Panel
+// Sharing
 // ============================================================================
 
-function showInfoPanel(isoCode) {
-  const panel = document.getElementById('info-panel');
-  const stats = getCountryStats(isoCode, currentMetric);
-  
-  if (!stats) {
-    const territoryName = escapeHtml(tn(TERRITORY_NAMES[isoCode]) || t('unknownTerritory')(isoCode));
-    const parent = TERRITORY_PARENTS[isoCode];
-    const parentNote = parent
-      ? `<p>${t('dataIncludedUnder')(escapeHtml(tn(parent)))}</p>`
-      : `<p>${escapeHtml(t('noDataAvailable'))}</p>`;
-    panel.innerHTML = `
-      <div class="panel-content">
-        <button class="panel-close" onclick="deselectCountry()" title="${escapeHtml(t('close'))}">&times;</button>
-        <button class="panel-minimize" onclick="toggleInfoMinimize()" title="${escapeHtml(t('minimize'))}">
-          <svg width="18" height="18" viewBox="0 0 18 18" fill="none"><path d="M4 11l5-5 5 5" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/></svg>
-        </button>
-        <h2>${territoryName}</h2>
-        <div class="panel-body">
-          ${parentNote}
-        </div>
-      </div>`;
-    panel.classList.add('visible');
-    panel.classList.remove('minimized');
+function shareText() {
+  const id = state.selectedId;
+  const ratio = id != null ? getBudgetRatio(id, state.metric) : null;
+  if (ratio == null) return t('shareTextDefault');
+  const name = placeName(id);
+  return isParisMetric(state.metric)
+    ? t('shareTextCountry')(name, fmtPercent(ratio), t('warmingLabel')[state.metric])
+    : t('shareTextWorld')(name, fmtPercent(ratio));
+}
+
+async function copyToClipboard(text) {
+  if (navigator.clipboard && window.isSecureContext) {
+    await navigator.clipboard.writeText(text);
     return;
   }
-
-  const ratio = stats.ratio;
-  const ratioPercent = ratio ? (ratio * 100).toFixed(0) : 'N/A';
-  const ratioClass = ratio > 1 ? 'over-budget' : 'under-budget';
-  const ratioSign = ratio > 1 ? '+' : '';
-  const overUnder = ratio > 1 ? t('overTarget') : t('underTarget');
-  const diffPercent = ratio ? Math.abs((ratio - 1) * 100).toFixed(0) : 'N/A';
-
-  // Build metric rows
-  const metricRows = [];
-  
-  // Territorial
-  const terrPC = stats.co2 / stats.population;
-  metricRows.push({
-    label: t('metricTerritorial'),
-    value: `${formatCompact(terrPC, 1)} ${t('unitTCap')}`,
-    total: `${formatCompact(stats.co2, 0)} Mt`,
-    active: currentMetric === 'co2'
-  });
-
-  // Consumption
-  if (stats.cons) {
-    const consPC = stats.cons / stats.population;
-    metricRows.push({
-      label: t('metricConsumption'),
-      value: `${formatCompact(consPC, 1)} ${t('unitTCap')}`,
-      total: `${formatCompact(stats.cons, 0)} Mt`,
-      active: currentMetric === 'cons'
-    });
-  }
-
-  // Historical
-  if (stats.hist) {
-    const histPC = (stats.hist * 1000) / stats.population;
-    metricRows.push({
-      label: t('metricHistorical'),
-      value: `${formatCompact(histPC, 0)} ${t('unitTCap')}`,
-      total: `${formatCompact(stats.hist, 1)} Gt`,
-      active: currentMetric === 'hist'
-    });
-  }
-
-  // Paris 1.5°C
-  if (stats.co2) {
-    const parisVal = stats.cons != null ? stats.cons : stats.co2;
-    const parisPC = parisVal / stats.population;
-    const parisAllowance = PARIS_BUDGET.perCapita;
-    metricRows.push({
-      label: t('metricParis'),
-      value: `${formatCompact(parisPC, 1)} vs ${formatCompact(parisAllowance, 1)} ${t('unitTCap')}`,
-      total: `${formatCompact(parisVal, 0)} Mt`,
-      active: currentMetric === 'paris'
-    });
-  }
-
-  // Paris 2.0°C
-  if (stats.co2) {
-    const parisVal = stats.cons != null ? stats.cons : stats.co2;
-    const parisPC = parisVal / stats.population;
-    const paris2Allowance = PARIS_2_BUDGET.perCapita;
-    metricRows.push({
-      label: t('metricParis2'),
-      value: `${formatCompact(parisPC, 1)} vs ${formatCompact(paris2Allowance, 1)} ${t('unitTCap')}`,
-      total: `${formatCompact(parisVal, 0)} Mt`,
-      active: currentMetric === 'paris2'
-    });
-  }
-
-  const isParis = currentMetric === 'paris' || currentMetric === 'paris2';
-  const activeParisBudget = currentMetric === 'paris2' ? PARIS_2_BUDGET : PARIS_BUDGET;
-  const parisLabel = currentMetric === 'paris2' ? '2.0°C' : '1.5°C';
-  const worldPC = isParis
-    ? formatCompact(activeParisBudget.perCapita, 1)
-    : formatCompact(WORLD_TOTALS.co2 / WORLD_TOTALS.population, 1);
-  const worldPCLabel = isParis ? t('parisTCap')(parisLabel) : t('worldAvgTCap');
-
-  panel.innerHTML = `
-    <div class="panel-content">
-      <button class="panel-close" onclick="deselectCountry()" title="${escapeHtml(t('close'))}">&times;</button>
-      <button class="panel-minimize" onclick="toggleInfoMinimize()" title="${escapeHtml(t('minimize'))}">
-        <svg width="18" height="18" viewBox="0 0 18 18" fill="none"><path d="M4 11l5-5 5 5" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/></svg>
-      </button>
-      <h2>${escapeHtml(tn(stats.name))}</h2>
-
-      <div class="panel-body">
-      ${!isScaled ? `
-      <button class="resize-btn ${selectedScaled ? 'active' : ''}" onclick="toggleSelectedScale()">
-        ${selectedScaled ? t('resetToActual') : t('resizeToBudget')}
-      </button>
-      ` : ''}
-      
-      <div class="stat-hero ${ratioClass}">
-        <div class="ratio-value">${ratioPercent}%</div>
-        <div class="ratio-label">${isParis ? t('ofParisBudget')(parisLabel) : t('ofFairBudget')}</div>
-        <div class="ratio-detail">${diffPercent}% ${overUnder} ${isParis ? t('parisTarget') : t('fairShare')}</div>
-      </div>
-
-      <div class="stat-grid">
-        <div class="stat-item">
-          <div class="stat-number">${formatCompact(stats.population, 1)}M</div>
-          <div class="stat-label">${escapeHtml(t('population'))}</div>
-        </div>
-        <div class="stat-item">
-          <div class="stat-number">${stats.metricPerCapita ? formatCompact(stats.metricPerCapita, 1) : 'N/A'}</div>
-          <div class="stat-label">${escapeHtml(t('tCO2PerCapita'))}</div>
-        </div>
-        <div class="stat-item">
-          <div class="stat-number">${worldPC}</div>
-          <div class="stat-label">${escapeHtml(worldPCLabel)}</div>
-        </div>
-        <div class="stat-item">
-          <div class="stat-number">${ratio ? formatCompact(ratio, 2) + '\u00d7' : 'N/A'}</div>
-          <div class="stat-label">${escapeHtml(t('scaleFactor'))}</div>
-        </div>
-      </div>
-
-      <h3>${t('emissionsBreakdown')}</h3>
-      <table class="metrics-table">
-        <thead>
-          <tr>
-            <th>${t('metric')}</th>
-            <th>${t('perCapita')}</th>
-            <th>${t('total')}</th>
-          </tr>
-        </thead>
-        <tbody>
-          ${metricRows.map(r => `
-            <tr class="${r.active ? 'active-metric' : ''}">
-              <td>${r.label}</td>
-              <td>${r.value}</td>
-              <td>${r.total}</td>
-            </tr>
-          `).join('')}
-        </tbody>
-      </table>
-
-      <div class="budget-bar-container">
-        <div class="budget-bar-label">${t('fairShareUsage')}</div>
-        <div class="budget-bar">
-          <div class="budget-bar-fill ${ratioClass}" style="width: ${Math.min(ratio / 12 * 100, 100)}%">
-          </div>
-          <div class="budget-bar-marker" style="left: ${1 / 12 * 100}%"></div>
-        </div>
-        <div class="budget-bar-scale">
-          <span style="left:0%">0\u00d7</span>
-          <span style="left:${1/12*100}%">1\u00d7</span>
-          <span style="left:${3/12*100}%">3\u00d7</span>
-          <span style="left:${6/12*100}%">6\u00d7</span>
-          <span style="left:${9/12*100}%">9\u00d7</span>
-          <span style="left:100%">12\u00d7</span>
-        </div>
-      </div>
-
-      <div class="explanation">
-        ${isParis ? `
-        ${t('parisExplanation')(parisLabel, activeParisBudget.perCapita.toFixed(1), tn(stats.name), ratio ? ratio.toFixed(1) + '×' : 'N/A', ratio ? Math.max(1, Math.round(activeParisBudget.yearsLeft / ratio)) : '?', activeParisBudget.yearsLeft)}
-        <p class="data-note">${stats.usedFallback
-          ? t('consFallbackNote')
-          : t('consNote')}</p>
-        ` : currentMetric === 'cons' ? `
-        ${t('consExplanation')(tn(stats.name), ratio > 1 ? t('needToReduce') : t('couldIncrease'), diffPercent)}
-        <p class="data-note">${stats.usedFallback
-          ? t('consFallbackNote')
-          : t('consNote')}</p>
-        ` : `
-        ${t('defaultExplanation')(tn(stats.name), ratio > 1 ? t('needToReduce') : t('couldIncrease'), diffPercent, ratioPercent)}
-        `}
-      </div>
-      </div>
-    </div>
-  `;
-
-  panel.classList.add('visible');
-  panel.classList.remove('minimized');
-  updateLegendVisibility();
-  updateHeaderSummary();
-
-  // Auto-collapse header on mobile to maximize map space
-  if (window.innerWidth <= 640) {
-    document.querySelector('.header').classList.add('collapsed');
-  }
+  // Older browsers and plain http
+  const field = document.createElement('textarea');
+  field.value = text;
+  field.setAttribute('readonly', '');
+  field.style.position = 'fixed';
+  field.style.opacity = '0';
+  document.body.appendChild(field);
+  field.select();
+  const copied = document.execCommand('copy');
+  field.remove();
+  if (!copied) throw new Error('copy command rejected');
 }
 
-function hideInfoPanel() {
-  document.getElementById('info-panel').classList.remove('visible');
-  document.getElementById('info-panel').classList.remove('minimized');
-  updateLegendVisibility();
-}
+/**
+ * Phones get the system share sheet, everything else a copied link.
+ */
+async function shareView() {
+  writeUrlState();
+  const url = location.href;
 
-function toggleInfoMinimize() {
-  document.getElementById('info-panel').classList.toggle('minimized');
+  if (navigator.share && window.matchMedia('(pointer: coarse)').matches) {
+    try {
+      await navigator.share({ title: t('pageTitle'), text: shareText(), url });
+      return;
+    } catch (error) {
+      if (error.name === 'AbortError') return;   // the user closed the sheet
+    }
+  }
+
+  try {
+    await copyToClipboard(url);
+    showToast(t('linkCopied'));
+  } catch (error) {
+    showToast(t('shareFailed'));
+  }
 }
 
 // ============================================================================
@@ -1252,236 +306,205 @@ function toggleInfoMinimize() {
 // ============================================================================
 
 function setupControls() {
-  // Debounced render for rapid interactions
-  const debouncedRender = debounce(() => {
-    renderCountries();
-    if (selectedCountryId) showInfoPanel(selectedCountryId);
-    if (rankingOpen) buildRanking();
-  }, DEBOUNCE_RENDER_MS);
-
-  // Metric toggle buttons
-  document.querySelectorAll('.metric-btn').forEach(btn => {
-    btn.addEventListener('click', () => {
-      if (!VALID_METRICS.includes(btn.dataset.metric)) return;
-      document.querySelectorAll('.metric-btn').forEach(b => {
-        b.classList.remove('active');
-        b.setAttribute('aria-checked', 'false');
-      });
-      btn.classList.add('active');
-      btn.setAttribute('aria-checked', 'true');
-      currentMetric = btn.dataset.metric;
-      clearSphericalScaleCache();
-      debouncedRender();
-      updateHeaderSummary();
-    });
+  // Metric radio group: click, or arrow keys as in any radio group
+  const metricButtons = Array.from(document.querySelectorAll('.metric-btn'));
+  metricButtons.forEach(btn => {
+    btn.addEventListener('click', () => setMetric(btn.dataset.metric));
+  });
+  $('metric-groups').addEventListener('keydown', (e) => {
+    const step = { ArrowRight: 1, ArrowDown: 1, ArrowLeft: -1, ArrowUp: -1 }[e.key];
+    if (!step) return;
+    e.preventDefault();
+    const index = metricButtons.findIndex(btn => btn.dataset.metric === state.metric);
+    const next = metricButtons[(index + step + metricButtons.length) % metricButtons.length];
+    setMetric(next.dataset.metric);
+    next.focus();
   });
 
-  // Scale toggle
-  document.getElementById('scale-toggle').addEventListener('change', (e) => {
-    isScaled = e.target.checked;
-    selectedScaled = false;
-    document.getElementById('toggle-label').textContent = isScaled ? t('budgetView') : t('actualSize');
-    renderCountries();
-    if (selectedCountryId) showInfoPanel(selectedCountryId);
-    updateHeaderSummary();
+  $('scale-toggle').addEventListener('change', (e) => setScaled(e.target.checked));
+  $('colorblind-toggle').addEventListener('change', (e) => setColorblind(e.target.checked));
+
+  $('projection-toggle').addEventListener('click', () => setGlobeView(!state.globeView));
+  $('share-view').addEventListener('click', shareView);
+
+  $('settings-toggle').addEventListener('click', () => {
+    setHeaderCollapsed(!$('header').classList.contains('collapsed'));
   });
 
-  // Colorblind toggle
-  document.getElementById('colorblind-toggle').addEventListener('change', (e) => {
-    colorblindMode = e.target.checked;
-    document.body.classList.toggle('colorblind', colorblindMode);
-    renderCountries();
-    createLegend();
-    if (selectedCountryId) showInfoPanel(selectedCountryId);
-    if (rankingOpen) buildRanking();
-    updateHeaderSummary();
-  });
-
-  // Ranking toggle
-  document.getElementById('ranking-toggle').addEventListener('click', toggleRanking);
-  document.getElementById('ranking-close').addEventListener('click', toggleRanking);
-
-  // Projection toggle
-  document.getElementById('projection-toggle').addEventListener('click', switchProjection);
-
-  // Click on map background to deselect
-  map.on('click', (e) => {
-    if (!e.originalEvent.defaultPrevented) {
-      // Only deselect if clicking on the background, not on a country
-    }
-  });
-}
-
-// ============================================================================
-// UI Helpers
-// ============================================================================
-
-function showLoading(show) {
-  document.getElementById('loading').style.display = show ? 'flex' : 'none';
-}
-
-// ============================================================================
-// Legend
-// ============================================================================
-
-function createLegend() {
-  const legend = document.getElementById('legend');
-  
-  let html = '<div class="legend-title">' + escapeHtml(t('budgetRatio')) + '</div>';
-  html += '<div class="legend-bar">';
-  for (const val of LEGEND_STEPS) {
-    html += `<div class="legend-step" style="background-color: ${getRatioColor(val)}" title="${val}\u00d7" aria-label="Budget ratio ${val}\u00d7"></div>`;
-  }
-  html += '</div>';
-  html += '<div class="legend-ticks">';
-  for (const val of LEGEND_STEPS) {
-    const label = LEGEND_LABELS.get(val) || '';
-    const isBold = val === 1.0;
-    html += `<span class="legend-tick${isBold ? ' legend-tick-bold' : ''}">${label}</span>`;
-  }
-  html += '</div>';
-  
-  legend.innerHTML = html;
-}
-
-// ============================================================================
-// Ranking Panel
-// ============================================================================
-
-function buildRanking() {
-  const list = document.getElementById('ranking-list');
-  const entries = [];
-
-  for (const [id, d] of Object.entries(CO2_DATA)) {
-    if (!d.pop) continue;
-    const ratio = getBudgetRatio(id, currentMetric);
-    if (ratio == null) continue;
-
-    let perCapita, unit;
-    if (currentMetric === 'hist') {
-      perCapita = d.hist != null ? (d.hist * 1000) / d.pop : null;
-      unit = t('unitTCumulCap');
-    } else if (currentMetric === 'cons' || currentMetric === 'paris' || currentMetric === 'paris2') {
-      const val = d.cons != null ? d.cons : d.co2;
-      perCapita = val != null ? val / d.pop : null;
-      unit = t('unitTCap');
-    } else {
-      perCapita = d.co2 != null ? d.co2 / d.pop : null;
-      unit = t('unitTCap');
-    }
-
-    entries.push({ id, name: tn(d.name), ratio, perCapita, unit });
-  }
-
-  // Sort worst (highest ratio) first
-  entries.sort((a, b) => b.ratio - a.ratio);
-
-  let html = '';
-  entries.forEach((e, i) => {
-    const rank = i + 1;
-    const color = getRatioColor(e.ratio);
-    const pcText = e.perCapita != null ? formatCompact(e.perCapita, 1) : 'N/A';
-    const isSelected = e.id === selectedCountryId;
-    html += `<div class="ranking-item${isSelected ? ' selected' : ''}" data-id="${escapeHtml(e.id)}">
-      <span class="ranking-rank">${rank}</span>
-      <span class="ranking-color" style="background:${color}"></span>
-      <span class="ranking-name">${escapeHtml(e.name)}</span>
-      <span class="ranking-value">${escapeHtml(pcText)} ${escapeHtml(e.unit)}</span>
-    </div>`;
-  });
-
-  list.innerHTML = html;
-
-  // Click handlers
-  list.querySelectorAll('.ranking-item').forEach(item => {
-    item.addEventListener('click', () => {
-      const id = item.dataset.id;
-      selectCountry(id);
-      panToCountry(id);
-      buildRanking();
-    });
-  });
-
-  // Scroll selected into view
-  const selected = list.querySelector('.ranking-item.selected');
-  if (selected) selected.scrollIntoView({ block: 'nearest' });
-}
-
-function toggleRanking() {
-  rankingOpen = !rankingOpen;
-  document.getElementById('ranking-panel').classList.toggle('visible', rankingOpen);
-  document.getElementById('ranking-toggle').classList.toggle('active', rankingOpen);
-  if (rankingOpen) buildRanking();
-  updateLegendVisibility();
-}
-
-function updateLegendVisibility() {
-  const legend = document.getElementById('legend');
-  const infoOpen = document.getElementById('info-panel').classList.contains('visible');
-  const isSmallScreen = window.innerWidth <= 640;
-  legend.style.display = (isSmallScreen && (infoOpen || rankingOpen)) ? 'none' : '';
-}
-
-function panToCountry(isoCode) {
-  if (isGlobeView) {
-    if (!globeGeojsonData || !globe) return;
-    const feature = globeGeojsonData.features.find(f => f.id === isoCode);
-    if (!feature) return;
-    const centroid = getFeatureCentroid(feature);
-    if (centroid) globe.pointOfView(centroid, 600);
-    return;
-  }
-  if (!geojsonData) return;
-  const feature = geojsonData.features.find(f => f.id === isoCode);
-  if (!feature) return;
-  const layer = L.geoJSON(feature);
-  map.flyToBounds(layer.getBounds(), { duration: 0.6, maxZoom: 5, padding: [40, 40] });
-}
-
-// ============================================================================
-// Bootstrap
-// ============================================================================
-
-document.addEventListener('DOMContentLoaded', () => {
-  createLegend();
-  initApp();
-
-  // Keep --header-height in sync when header wraps
-  const header = document.querySelector('.header');
-  const ro = new ResizeObserver(() => {
-    document.documentElement.style.setProperty('--header-height', header.offsetHeight + 'px');
-    if (map) map.invalidateSize();
-    if (globe && isGlobeView) {
-      const c = document.getElementById('globe');
-      globe.width(c.clientWidth).height(c.clientHeight);
-    }
-  });
-  ro.observe(header);
-
-  // Collapsible header
-  const collapseBtn = document.getElementById('header-collapse');
-  collapseBtn.addEventListener('click', () => {
-    header.classList.toggle('collapsed');
-  });
-
-  // Language switcher
   document.querySelectorAll('.lang-btn').forEach(btn => {
     btn.addEventListener('click', () => setLanguage(btn.dataset.lang));
   });
 
-  // Apply initial language (auto-detect)
-  document.documentElement.lang = currentLang;
-  document.title = t('pageTitle');
-  applyStaticTranslations();
+  // Ranking
+  $('ranking-toggle').addEventListener('click', () => {
+    setRankingOpen(!state.rankingOpen);
+    if (state.rankingOpen && isSmallScreen()) setHeaderCollapsed(true);
+    syncViewSize();
+  });
+  $('ranking-close').addEventListener('click', () => {
+    setRankingOpen(false);
+    syncViewSize();
+    $('ranking-toggle').focus();
+  });
+  $('ranking-search').addEventListener('input', filterRanking);
+  $('ranking-list').addEventListener('click', (e) => {
+    const item = e.target.closest('.ranking-item');
+    if (item) selectCountry(item.dataset.id, { pan: true, focus: true });
+  });
 
-  // Settings summary
-  updateHeaderSummary();
-});
+  // Country panel (its content is redrawn, so the clicks are delegated)
+  $('info-panel').addEventListener('click', (e) => {
+    const button = e.target.closest('[data-action]');
+    if (!button) return;
+    const action = button.dataset.action;
+    if (action === 'close') deselectCountry();
+    else if (action === 'minimize') {
+      setInfoMinimized(!$('info-panel').classList.contains('minimized'));
+      syncViewSize();
+    }
+    else if (action === 'resize') toggleSelectedScale();
+    else if (action === 'share') shareView();
+  });
 
-function updateHeaderSummary() {
-  const metrics = t('summaryMetrics');
-  const metric = metrics[currentMetric] || currentMetric;
-  const scaled = document.getElementById('scale-toggle').checked ? t('summaryScaled') : t('summaryActual');
-  const cb = document.getElementById('colorblind-toggle').checked ? ' · ' + t('summaryCB') : '';
-  document.getElementById('header-summary').textContent = `${metric} · ${scaled}${cb}`;
+  // Method dialog
+  $('about-open').addEventListener('click', openAbout);
+  $('about-close').addEventListener('click', () => $('about').close());
+  $('about').addEventListener('click', (e) => {
+    if (e.target === $('about')) $('about').close();   // click on the backdrop
+  });
+
+  // Escape closes the country panel, then the ranking. The dialog and the
+  // search field handle Escape themselves.
+  document.addEventListener('keydown', (e) => {
+    if (e.key !== 'Escape' || $('about').open) return;
+    if (e.target === $('ranking-search') && e.target.value) return;
+    if (state.selectedId != null) deselectCountry();
+    else if (state.rankingOpen) {
+      setRankingOpen(false);
+      syncViewSize();
+      $('ranking-toggle').focus();
+    }
+  });
+
+  // A pasted or edited link, or the back button
+  window.addEventListener('hashchange', () => applyUrlState(readUrlState()));
+
+  // Keep the layout variable and the renderers in step with the header
+  // height (it wraps on narrow screens) and with the window size.
+  const header = $('header');
+  new ResizeObserver(() => {
+    document.documentElement.style.setProperty('--header-height', header.offsetHeight + 'px');
+    refreshMapSize();
+    resizeGlobe();
+  }).observe(header);
+  window.addEventListener('resize', debounce(resizeGlobe, 150));
 }
+
+/**
+ * Apply a view read from the URL to the running app.
+ */
+function applyUrlState(next) {
+  state.metric = next.metric;
+  state.scaled = next.scaled;
+  state.colorblind = next.colorblind;
+  document.body.classList.toggle('colorblind', state.colorblind);
+
+  if (isKnownPlace(next.selectedId)) {
+    state.selectedId = next.selectedId;
+    state.selectedScaled = true;
+  } else {
+    state.selectedId = null;
+    state.selectedScaled = false;
+    hideInfoPanel();
+  }
+
+  renderAll();
+  markRankingSelection(true);
+  syncViewSize();
+  if (next.globeView !== state.globeView) {
+    setGlobeView(next.globeView);
+  } else if (state.selectedId != null) {
+    panToCountry(state.selectedId);
+  }
+}
+
+// ============================================================================
+// Startup
+// ============================================================================
+
+/**
+ * Take the country boundaries (vendor/world-atlas) and prepare the shapes
+ * for the flat map. The globe and the zoomed-out flat map make their own
+ * lighter shapes from the topology (js/globe.js, js/map.js).
+ */
+function loadGeoJSON() {
+  state.topology = WORLD_ATLAS;
+  state.geojson = flatMapFeatures(state.topology);
+}
+
+async function start() {
+  showLoading(true);
+  try {
+    if (typeof L === 'undefined' || typeof topojson === 'undefined' || typeof WORLD_ATLAS === 'undefined') {
+      throw new Error('A map library or the country shapes did not load');
+    }
+    if (!map) initMap();
+    loadGeoJSON();
+  } catch (error) {
+    console.error('Failed to initialize:', error);
+    // The missing file is a script of this page: only a fresh page gets it.
+    showLoadError(() => location.reload());
+    return;
+  }
+
+  showLoading(false);
+  state.homeId = guessHomeCountry();
+  applyUrlState(readUrlState());
+  // A first visit without a country in the link starts on the visitor's own.
+  if (state.selectedId == null && state.homeId != null) focusMapOnHome(state.homeId);
+  scheduleGlobePrewarm();
+}
+
+/**
+ * The visitor's own country, guessed from what the browser already knows:
+ * the device's time zone, then the region in the preferred languages.
+ * Nothing is sent anywhere and nothing is stored. Returns the id of a
+ * country on the map, or null.
+ */
+function guessHomeCountry() {
+  const onMap = (code) => {
+    const id = REGION_IDS[code];
+    return id && findFeature(id) ? id : null;
+  };
+
+  try {
+    const zone = Intl.DateTimeFormat().resolvedOptions().timeZone;
+    const names = [zone];
+    for (const pair of TIME_ZONE_ALIASES) {
+      if (pair.includes(zone)) names.push(...pair);
+    }
+    for (const code of Object.keys(REGION_IDS)) {
+      const locale = new Intl.Locale(`und-${code}`);
+      const zones = locale.getTimeZones ? locale.getTimeZones() : locale.timeZones;
+      if (zones && names.some(name => zones.includes(name)) && onMap(code)) return onMap(code);
+    }
+  } catch (e) { /* older browsers: fall through to the language */ }
+
+  for (const language of navigator.languages || [navigator.language]) {
+    try {
+      const region = new Intl.Locale(language).region;
+      if (region && onMap(region)) return onMap(region);
+    } catch (e) { /* not a language tag this browser understands */ }
+  }
+  return null;
+}
+
+document.addEventListener('DOMContentLoaded', () => {
+  document.documentElement.style.setProperty('--header-height', $('header').offsetHeight + 'px');
+  applyLanguage();
+  setHeaderCollapsed(isSmallScreen());
+  renderHeader();
+  renderKey();
+  setupControls();
+  start();
+});

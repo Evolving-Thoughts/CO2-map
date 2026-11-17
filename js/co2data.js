@@ -1,396 +1,238 @@
+// GENERATED FILE. Do not edit by hand; run `python generate_data.py` instead.
+//
 // CO2 emissions data from Our World in Data (Global Carbon Project)
 // Source: https://github.com/owid/co2-data
-// Data year: 2023 (consumption-based: latest available, mostly 2022)
-// Generated from owid-co2-data.csv
 //
 // Units:
 //   pop  = population in millions
 //   co2  = territorial CO2 emissions in Mt (million tonnes)
 //   cons = consumption-based CO2 emissions in Mt (null if unavailable)
-//   hist = cumulative CO2 emissions 1750-2023 in Gt (gigatonnes)
+//   hist = cumulative CO2 emissions since 1750 in Gt (gigatonnes)
+//   emittedSince2020 = world CO2 emissions from 2020 to the data year in Gt
+//
+// Each value is the newest one available up to the data year.
+// WORLD_TOTALS is the OWID "World" row. It includes international aviation
+// and shipping, which are not attributed to any country.
 
-// Territories whose emissions are counted under a parent country
-const TERRITORY_PARENTS = {
-  "732": "Morocco",           // Western Sahara
-  "254": "France",            // French Guiana
-  "312": "France",            // Guadeloupe
-  "474": "France",            // Martinique
-  "638": "France",            // Réunion
-  "175": "France",            // Mayotte
-  "652": "France",            // Saint Barthélemy
-  "663": "France",            // Saint Martin
-  "831": "United Kingdom",    // Guernsey
-  "832": "United Kingdom",    // Jersey
-  "833": "United Kingdom",    // Isle of Man
-  "248": "Finland",           // Åland Islands
-  "016": "United States",     // American Samoa
-  "574": "Australia",         // Norfolk Island
-  "162": "Australia",         // Christmas Island
-  "010": null,                // Antarctica (no parent)
-  "336": null,                // Vatican (negligible)
-  "580": "United States",     // Northern Mariana Islands
-  "850": "United States",     // U.S. Virgin Islands
-  "316": "United States",     // Guam
-  "630": "United States",     // Puerto Rico
-  "239": "United Kingdom",    // South Georgia and the South Sandwich Islands
-  "086": "United Kingdom",    // British Indian Ocean Territory
-  "612": "United Kingdom",    // Pitcairn Islands
-  "238": "United Kingdom",    // Falkland Islands
-  "136": "United Kingdom",    // Cayman Islands
-  "260": "France",            // French Southern and Antarctic Lands
-  "334": "Australia",         // Heard Island and McDonald Islands
-  "Somaliland": "Somalia",    // Somaliland
-  "Kosovo": null,             // Kosovo (disputed)
-  "N. Cyprus": "Cyprus",      // Northern Cyprus
-  "Indian Ocean Ter.": "Australia", // Indian Ocean Territories
-  "Siachen Glacier": null     // Siachen Glacier (disputed)
-};
-
-// Names for territories (not in CO2_DATA)
-const TERRITORY_NAMES = {
-  "732": "Western Sahara",
-  "254": "French Guiana",
-  "312": "Guadeloupe",
-  "474": "Martinique",
-  "638": "Réunion",
-  "175": "Mayotte",
-  "652": "Saint Barthélemy",
-  "663": "Saint Martin",
-  "831": "Guernsey",
-  "832": "Jersey",
-  "833": "Isle of Man",
-  "248": "Åland Islands",
-  "016": "American Samoa",
-  "574": "Norfolk Island",
-  "162": "Christmas Island",
-  "010": "Antarctica",
-  "336": "Vatican City",
-  "580": "Northern Mariana Islands",
-  "850": "U.S. Virgin Islands",
-  "316": "Guam",
-  "630": "Puerto Rico",
-  "239": "South Georgia and the South Sandwich Islands",
-  "086": "British Indian Ocean Territory",
-  "612": "Pitcairn Islands",
-  "238": "Falkland Islands",
-  "136": "Cayman Islands",
-  "260": "French Southern and Antarctic Lands",
-  "334": "Heard Island and McDonald Islands",
-  "Somaliland": "Somaliland",
-  "Kosovo": "Kosovo",
-  "N. Cyprus": "Northern Cyprus",
-  "Indian Ocean Ter.": "Indian Ocean Territories",
-  "Siachen Glacier": "Siachen Glacier"
-};
+const DATA_META = {"dataYear": 2025, "generated": "2026-11-17", "sourceFile": "owid-co2-data.csv", "sourceSha256": "377bd643aeeefe1eebf4913a81babf588fc8bd66d5c806905b32d94ee9334697"};
 
 const CO2_DATA = {
-  "004": { name: 'Afghanistan', pop: 41.455, co2: 10.516, cons: null, hist: 0.232 },
-  "008": { name: 'Albania', pop: 2.812, co2: 4.417, cons: 5.382, hist: 0.303 },
-  "012": { name: 'Algeria', pop: 46.164, co2: 202.847, cons: null, hist: 5.278 },
-  "020": { name: 'Andorra', pop: 0.081, co2: 0.418, cons: null, hist: 0.016 },
-  "024": { name: 'Angola', pop: 36.75, co2: 21.675, cons: null, hist: 0.717 },
-  "028": { name: 'Antigua and Barbuda', pop: 0.093, co2: 0.641, cons: null, hist: 0.026 },
-  "031": { name: 'Azerbaijan', pop: 10.318, co2: 42.748, cons: 40.838, hist: 2.597 },
-  "032": { name: 'Argentina', pop: 45.538, co2: 178.407, cons: 185.666, hist: 8.98 },
-  "036": { name: 'Australia', pop: 26.451, co2: 384.316, cons: 372.151, hist: 19.653 },
-  "040": { name: 'Austria', pop: 9.13, co2: 56.909, cons: 76.469, hist: 5.693 },
-  "044": { name: 'Bahamas', pop: 0.399, co2: 2.956, cons: null, hist: 0.177 },
-  "048": { name: 'Bahrain', pop: 1.57, co2: 38.787, cons: 22.064, hist: 1.073 },
-  "050": { name: 'Bangladesh', pop: 171.467, co2: 104.527, cons: 167.859, hist: 1.893 },
-  "051": { name: 'Armenia', pop: 2.943, co2: 7.43, cons: 7.674, hist: 0.399 },
-  "052": { name: 'Barbados', pop: 0.282, co2: 1.317, cons: null, hist: 0.063 },
-  "056": { name: 'Belgium', pop: 11.713, co2: 84.703, cons: 196.605, hist: 12.821 },
-  "060": { name: 'Bermuda', pop: 0.065, co2: 0.53, cons: null, hist: 0.03 },
-  "064": { name: 'Bhutan', pop: 0.786, co2: 1.63, cons: null, hist: 0.028 },
-  "068": { name: 'Bolivia', pop: 12.244, co2: 24.621, cons: 25.628, hist: 0.612 },
-  "070": { name: 'Bosnia and Herzegovina', pop: 3.185, co2: 19.881, cons: null, hist: 1.024 },
-  "072": { name: 'Botswana', pop: 2.48, co2: 7.249, cons: 14.509, hist: 0.177 },
-  "076": { name: 'Brazil', pop: 211.141, co2: 483.992, cons: 469.989, hist: 17.716 },
-  "084": { name: 'Belize', pop: 0.411, co2: 0.766, cons: null, hist: 0.022 },
-  "090": { name: 'Solomon Islands', pop: 0.8, co2: 0.282, cons: null, hist: 0.011 },
-  "092": { name: 'British Virgin Islands', pop: 0.039, co2: 0.185, cons: null, hist: 0.006 },
-  "096": { name: 'Brunei', pop: 0.459, co2: 12.503, cons: 8.876, hist: 0.416 },
-  "100": { name: 'Bulgaria', pop: 6.796, co2: 34.501, cons: 35.31, hist: 3.953 },
-  "104": { name: 'Myanmar', pop: 54.134, co2: 31.793, cons: null, hist: 0.696 },
-  "108": { name: 'Burundi', pop: 13.689, co2: 0.901, cons: null, hist: 0.016 },
-  "112": { name: 'Belarus', pop: 9.116, co2: 55.736, cons: 62.548, hist: 5.128 },
-  "116": { name: 'Cambodia', pop: 17.424, co2: 21.412, cons: 39.064, hist: 0.23 },
-  "120": { name: 'Cameroon', pop: 28.373, co2: 9.695, cons: 10.384, hist: 0.3 },
-  "124": { name: 'Canada', pop: 39.299, co2: 545.479, cons: 519.943, hist: 35.111 },
-  "132": { name: 'Cape Verde', pop: 0.522, co2: 0.571, cons: null, hist: 0.016 },
-  "140": { name: 'Central African Republic', pop: 5.152, co2: 0.389, cons: null, hist: 0.012 },
-  "144": { name: 'Sri Lanka', pop: 22.972, co2: 19.166, cons: 46.439, hist: 0.547 },
-  "148": { name: 'Chad', pop: 19.319, co2: 2.848, cons: null, hist: 0.049 },
-  "152": { name: 'Chile', pop: 19.659, co2: 77.604, cons: 88.157, hist: 3.246 },
-  "156": { name: 'China', pop: 1422.585, co2: 12172.009, cons: 10857.025, hist: 272.798 },
-  "158": { name: 'Taiwan', pop: 23.317, co2: 267.127, cons: 294.802, hist: 9.83 },
-  "170": { name: 'Colombia', pop: 52.321, co2: 89.992, cons: 104.465, hist: 3.709 },
-  "174": { name: 'Comoros', pop: 0.85, co2: 0.542, cons: null, hist: 0.007 },
-  "178": { name: 'Congo', pop: 6.183, co2: 8.274, cons: null, hist: 0.182 },
-  "180": { name: 'Democratic Republic of Congo', pop: 105.79, co2: 5.881, cons: null, hist: 0.233 },
-  "184": { name: 'Cook Islands', pop: 0.014, co2: 0.077, cons: null, hist: 0.003 },
-  "188": { name: 'Costa Rica', pop: 5.106, co2: 8.473, cons: 14.692, hist: 0.277 },
-  "191": { name: 'Croatia', pop: 3.896, co2: 18.468, cons: 23.711, hist: 1.166 },
-  "192": { name: 'Cuba', pop: 11.02, co2: 23.47, cons: null, hist: 1.79 },
-  "196": { name: 'Cyprus', pop: 1.345, co2: 7.188, cons: 8.624, hist: 0.314 },
-  "203": { name: 'Czechia', pop: 10.81, co2: 83.232, cons: 100.025, hist: 12.256 },
-  "204": { name: 'Benin', pop: 14.111, co2: 5.928, cons: 8.434, hist: 0.122 },
-  "208": { name: 'Denmark', pop: 5.948, co2: 28.831, cons: 49.471, hist: 4.171 },
-  "212": { name: 'Dominica', pop: 0.067, co2: 0.165, cons: null, hist: 0.005 },
-  "214": { name: 'Dominican Republic', pop: 11.331, co2: 31.829, cons: 40.438, hist: 0.836 },
-  "218": { name: 'Ecuador', pop: 17.98, co2: 44.6, cons: 48.898, hist: 1.345 },
-  "222": { name: 'El Salvador', pop: 6.31, co2: 8.67, cons: 11.255, hist: 0.256 },
-  "226": { name: 'Equatorial Guinea', pop: 1.848, co2: 6.913, cons: null, hist: 0.156 },
-  "231": { name: 'Ethiopia', pop: 128.692, co2: 17.571, cons: 23.246, hist: 0.312 },
-  "232": { name: 'Eritrea', pop: 3.47, co2: 0.731, cons: null, hist: 0.018 },
-  "233": { name: 'Estonia', pop: 1.367, co2: 8.744, cons: 12.585, hist: 1.66 },
-  "234": { name: 'Faroe Islands', pop: 0.055, co2: 0.714, cons: null, hist: 0.033 },
-  "242": { name: 'Fiji', pop: 0.924, co2: 1.382, cons: null, hist: 0.053 },
-  "246": { name: 'Finland', pop: 5.601, co2: 31.799, cons: 47.462, hist: 3.295 },
-  "250": { name: 'France', pop: 66.439, co2: 270.263, cons: 407.365, hist: 39.783 },
-  "258": { name: 'French Polynesia', pop: 0.281, co2: 0.882, cons: null, hist: 0.034 },
-  "262": { name: 'Djibouti', pop: 1.153, co2: 0.558, cons: null, hist: 0.021 },
-  "266": { name: 'Gabon', pop: 2.485, co2: 5.321, cons: null, hist: 0.302 },
-  "268": { name: 'Georgia', pop: 3.807, co2: 11.922, cons: 15.366, hist: 0.651 },
-  "270": { name: 'Gambia', pop: 2.698, co2: 0.773, cons: null, hist: 0.017 },
-  "275": { name: 'Palestine', pop: 5.409, co2: 4.755, cons: null, hist: 0.073 },
-  "276": { name: 'Germany', pop: 84.548, co2: 593.766, cons: 768.481, hist: 94.563 },
-  "288": { name: 'Ghana', pop: 33.788, co2: 20.136, cons: 26.373, hist: 0.406 },
-  "296": { name: 'Kiribati', pop: 0.133, co2: 0.069, cons: null, hist: 0.002 },
-  "300": { name: 'Greece', pop: 10.243, co2: 51.988, cons: 67.191, hist: 4.243 },
-  "304": { name: 'Greenland', pop: 0.056, co2: 0.609, cons: null, hist: 0.035 },
-  "308": { name: 'Grenada', pop: 0.117, co2: 0.363, cons: null, hist: 0.009 },
-  "320": { name: 'Guatemala', pop: 18.125, co2: 19.736, cons: 25.449, hist: 0.496 },
-  "324": { name: 'Guinea', pop: 14.405, co2: 3.875, cons: 6.399, hist: 0.102 },
-  "328": { name: 'Guyana', pop: 0.826, co2: 4.379, cons: null, hist: 0.113 },
-  "332": { name: 'Haiti', pop: 11.637, co2: 2.865, cons: null, hist: 0.086 },
-  "340": { name: 'Honduras', pop: 10.645, co2: 12.404, cons: 10.458, hist: 0.297 },
-  "344": { name: 'Hong Kong', pop: 7.443, co2: 32.957, cons: 144.164, hist: 1.717 },
-  "348": { name: 'Hungary', pop: 9.686, co2: 40.344, cons: 56.728, hist: 5.144 },
-  "352": { name: 'Iceland', pop: 0.388, co2: 3.508, cons: null, hist: 0.168 },
-  "356": { name: 'India', pop: 1438.07, co2: 3062.756, cons: 2543.215, hist: 62.879 },
-  "360": { name: 'Indonesia', pop: 281.19, co2: 762.358, cons: 728.167, hist: 16.608 },
-  "364": { name: 'Iran', pop: 90.609, co2: 789.676, cons: 668.58, hist: 21.018 },
-  "368": { name: 'Iraq', pop: 45.074, co2: 227.91, cons: null, hist: 5.117 },
-  "372": { name: 'Ireland', pop: 5.197, co2: 33.568, cons: 40.834, hist: 2.333 },
-  "376": { name: 'Israel', pop: 9.256, co2: 55.382, cons: 88.32, hist: 2.555 },
-  "380": { name: 'Italy', pop: 59.499, co2: 312.291, cons: 429.008, hist: 25.704 },
-  "384": { name: 'Cote d\'Ivoire', pop: 31.166, co2: 14.052, cons: 17.865, hist: 0.385 },
-  "388": { name: 'Jamaica', pop: 2.84, co2: 8.069, cons: 8.334, hist: 0.477 },
-  "392": { name: 'Japan', pop: 124.371, co2: 986.91, cons: 1142.299, hist: 68.65 },
-  "398": { name: 'Kazakhstan', pop: 20.33, co2: 286.175, cons: 212.657, hist: 14.65 },
-  "400": { name: 'Jordan', pop: 11.439, co2: 23.119, cons: 31.817, hist: 0.77 },
-  "404": { name: 'Kenya', pop: 55.339, co2: 21.186, cons: 34.98, hist: 0.53 },
-  "408": { name: 'North Korea', pop: 26.418, co2: 62.025, cons: null, hist: 5.43 },
-  "410": { name: 'South Korea', pop: 51.749, co2: 589.178, cons: 708.865, hist: 20.124 },
-  "414": { name: 'Kuwait', pop: 4.839, co2: 123.169, cons: 122.346, hist: 3.746 },
-  "417": { name: 'Kyrgyzstan', pop: 7.074, co2: 11.144, cons: 19.193, hist: 0.871 },
-  "418": { name: 'Laos', pop: 7.665, co2: 24.157, cons: 14.825, hist: 0.219 },
-  "422": { name: 'Lebanon', pop: 5.773, co2: 15.559, cons: null, hist: 0.779 },
-  "426": { name: 'Lesotho', pop: 2.311, co2: 2.494, cons: null, hist: 0.07 },
-  "428": { name: 'Latvia', pop: 1.882, co2: 6.59, cons: 13.362, hist: 0.974 },
-  "430": { name: 'Liberia', pop: 5.493, co2: 0.834, cons: null, hist: 0.052 },
-  "434": { name: 'Libya', pop: 7.306, co2: 64.219, cons: null, hist: 2.425 },
-  "438": { name: 'Liechtenstein', pop: 0.04, co2: 0.131, cons: null, hist: 0.01 },
-  "440": { name: 'Lithuania', pop: 2.854, co2: 12.507, cons: 20.517, hist: 1.598 },
-  "442": { name: 'Luxembourg', pop: 0.665, co2: 6.841, cons: 7.332, hist: 0.776 },
-  "446": { name: 'Macao', pop: 0.714, co2: 1.043, cons: null, hist: 0.056 },
-  "450": { name: 'Madagascar', pop: 31.196, co2: 4.447, cons: 6.419, hist: 0.108 },
-  "454": { name: 'Malawi', pop: 21.104, co2: 1.853, cons: 3.233, hist: 0.056 },
-  "458": { name: 'Malaysia', pop: 35.126, co2: 276.297, cons: 286.508, hist: 6.752 },
-  "462": { name: 'Maldives', pop: 0.526, co2: 2.205, cons: null, hist: 0.031 },
-  "466": { name: 'Mali', pop: 23.769, co2: 6.743, cons: null, hist: 0.093 },
-  "470": { name: 'Malta', pop: 0.533, co2: 1.768, cons: 14.296, hist: 0.109 },
-  "478": { name: 'Mauritania', pop: 5.022, co2: 5.037, cons: null, hist: 0.095 },
-  "480": { name: 'Mauritius', pop: 1.274, co2: 4.588, cons: 7.913, hist: 0.129 },
-  "484": { name: 'Mexico', pop: 129.74, co2: 458.254, cons: 564.969, hist: 21.555 },
-  "492": { name: 'Monaco', pop: 0.039, co2: null, cons: null, hist: null },
-  "496": { name: 'Mongolia', pop: 3.432, co2: 44.184, cons: 36.605, hist: 0.817 },
-  "498": { name: 'Moldova', pop: 3.067, co2: 5.329, cons: null, hist: 1.353 },
-  "499": { name: 'Montenegro', pop: 0.634, co2: 2.407, cons: null, hist: 0.12 },
-  "500": { name: 'Montserrat', pop: 0.004, co2: 0.026, cons: null, hist: 0.002 },
-  "504": { name: 'Morocco', pop: 37.713, co2: 68.961, cons: 69.914, hist: 1.947 },
-  "508": { name: 'Mozambique', pop: 33.635, co2: 9.093, cons: 14.428, hist: 0.203 },
-  "512": { name: 'Oman', pop: 5.049, co2: 79.811, cons: 83.36, hist: 1.591 },
-  "516": { name: 'Namibia', pop: 2.963, co2: 3.443, cons: 9.646, hist: 0.084 },
-  "520": { name: 'Nauru', pop: 0.012, co2: 0.059, cons: null, hist: 0.005 },
-  "524": { name: 'Nepal', pop: 29.695, co2: 18.348, cons: 47.279, hist: 0.213 },
-  "528": { name: 'Netherlands', pop: 18.093, co2: 117.016, cons: 150.148, hist: 12.147 },
-  "531": { name: 'Curacao', pop: 0.185, co2: 2.205, cons: null, hist: 0.53 },
-  "533": { name: 'Aruba', pop: 0.108, co2: 0.887, cons: null, hist: 0.075 },
-  "534": { name: 'Sint Maarten (Dutch part)', pop: 0.043, co2: 0.691, cons: null, hist: 0.062 },
-  "535": { name: 'Bonaire Sint Eustatius and Saba', pop: 0.03, co2: 0.146, cons: null, hist: 0.01 },
-  "540": { name: 'New Caledonia', pop: 0.29, co2: 5.068, cons: null, hist: 0.166 },
-  "548": { name: 'Vanuatu', pop: 0.32, co2: 0.188, cons: null, hist: 0.005 },
-  "554": { name: 'New Zealand', pop: 5.173, co2: 31.56, cons: 41.396, hist: 1.98 },
-  "558": { name: 'Nicaragua', pop: 6.824, co2: 5.428, cons: 7.173, hist: 0.192 },
-  "562": { name: 'Niger', pop: 26.16, co2: 3.133, cons: null, hist: 0.058 },
-  "566": { name: 'Nigeria', pop: 227.883, co2: 129.376, cons: 133.284, hist: 4.575 },
-  "570": { name: 'Niue', pop: 0.002, co2: 0.007, cons: null, hist: 0.0 },
-  "578": { name: 'Norway', pop: 5.519, co2: 38.869, cons: 38.97, hist: 2.75 },
-  "583": { name: 'Micronesia (country)', pop: 0.113, co2: 0.144, cons: null, hist: 0.005 },
-  "584": { name: 'Marshall Islands', pop: 0.039, co2: 0.148, cons: null, hist: 0.004 },
-  "585": { name: 'Palau', pop: 0.018, co2: 0.216, cons: null, hist: 0.011 },
-  "586": { name: 'Pakistan', pop: 247.505, co2: 186.861, cons: 220.106, hist: 5.56 },
-  "591": { name: 'Panama', pop: 4.459, co2: 13.002, cons: 19.517, hist: 0.348 },
-  "598": { name: 'Papua New Guinea', pop: 10.39, co2: 8.358, cons: null, hist: 0.201 },
-  "600": { name: 'Paraguay', pop: 6.844, co2: 7.646, cons: 13.125, hist: 0.201 },
-  "604": { name: 'Peru', pop: 33.846, co2: 66.065, cons: 78.884, hist: 2.092 },
-  "608": { name: 'Philippines', pop: 114.891, co2: 160.98, cons: 211.593, hist: 3.809 },
-  "616": { name: 'Poland', pop: 38.763, co2: 283.243, cons: 273.856, hist: 28.771 },
-  "620": { name: 'Portugal', pop: 10.431, co2: 37.622, cons: 47.46, hist: 2.732 },
-  "624": { name: 'Guinea-Bissau', pop: 2.153, co2: 0.329, cons: null, hist: 0.008 },
-  "626": { name: 'East Timor', pop: 1.384, co2: 0.637, cons: null, hist: 0.011 },
-  "634": { name: 'Qatar', pop: 2.979, co2: 119.544, cons: 82.228, hist: 2.465 },
-  "642": { name: 'Romania', pop: 19.118, co2: 67.866, cons: 78.251, hist: 8.793 },
-  "643": { name: 'Russia', pop: 145.441, co2: 1733.135, cons: 1405.982, hist: 121.028 },
-  "646": { name: 'Rwanda', pop: 13.954, co2: 2.016, cons: 3.517, hist: 0.035 },
-  "654": { name: 'Saint Helena', pop: 0.005, co2: 0.011, cons: null, hist: 0.0 },
-  "659": { name: 'Saint Kitts and Nevis', pop: 0.047, co2: 0.25, cons: null, hist: 0.008 },
-  "660": { name: 'Anguilla', pop: 0.014, co2: 0.143, cons: null, hist: 0.003 },
-  "662": { name: 'Saint Lucia', pop: 0.179, co2: 0.517, cons: null, hist: 0.016 },
-  "666": { name: 'Saint Pierre and Miquelon', pop: 0.006, co2: 0.053, cons: null, hist: 0.004 },
-  "670": { name: 'Saint Vincent and the Grenadines', pop: 0.101, co2: 0.246, cons: null, hist: 0.008 },
-  "674": { name: 'San Marino', pop: 0.034, co2: null, cons: null, hist: null },
-  "678": { name: 'Sao Tome and Principe', pop: 0.231, co2: 0.14, cons: null, hist: 0.004 },
-  "682": { name: 'Saudi Arabia', pop: 33.264, co2: 677.442, cons: 654.104, hist: 18.328 },
-  "686": { name: 'Senegal', pop: 18.078, co2: 14.082, cons: 19.033, hist: 0.287 },
-  "688": { name: 'Serbia', pop: 6.773, co2: 42.907, cons: null, hist: 2.883 },
-  "690": { name: 'Seychelles', pop: 0.128, co2: 0.641, cons: null, hist: 0.015 },
-  "694": { name: 'Sierra Leone', pop: 8.461, co2: 1.38, cons: null, hist: 0.041 },
-  "702": { name: 'Singapore', pop: 5.789, co2: 51.068, cons: 186.926, hist: 2.194 },
-  "703": { name: 'Slovakia', pop: 5.518, co2: 30.766, cons: 35.035, hist: 3.999 },
-  "704": { name: 'Vietnam', pop: 100.352, co2: 347.399, cons: 247.788, hist: 5.298 },
-  "705": { name: 'Slovenia', pop: 2.118, co2: 12.012, cons: 19.735, hist: 0.899 },
-  "706": { name: 'Somalia', pop: 18.359, co2: 1.296, cons: null, hist: 0.041 },
-  "710": { name: 'South Africa', pop: 63.212, co2: 436.604, cons: 325.381, hist: 22.387 },
-  "716": { name: 'Zimbabwe', pop: 16.341, co2: 13.443, cons: 15.32, hist: 0.819 },
-  "724": { name: 'Spain', pop: 47.912, co2: 215.461, cons: 260.615, hist: 15.48 },
-  "728": { name: 'South Sudan', pop: 11.483, co2: 1.666, cons: null, hist: 0.044 },
-  "729": { name: 'Sudan', pop: 50.043, co2: 17.716, cons: null, hist: 0.499 },
-  "740": { name: 'Suriname', pop: 0.629, co2: 2.869, cons: null, hist: 0.126 },
-  "748": { name: 'Eswatini', pop: 1.231, co2: 1.03, cons: null, hist: 0.044 },
-  "752": { name: 'Sweden', pop: 10.551, co2: 36.709, cons: 61.722, hist: 5.096 },
-  "756": { name: 'Switzerland', pop: 8.871, co2: 31.977, cons: 118.33, hist: 3.126 },
-  "760": { name: 'Syria', pop: 23.595, co2: 31.674, cons: null, hist: 2.024 },
-  "762": { name: 'Tajikistan', pop: 10.39, co2: 10.264, cons: 13.021, hist: 0.507 },
-  "764": { name: 'Thailand', pop: 71.702, co2: 264.734, cons: 305.567, hist: 8.041 },
-  "768": { name: 'Togo', pop: 9.304, co2: 2.671, cons: 8.647, hist: 0.074 },
-  "776": { name: 'Tonga', pop: 0.105, co2: 0.146, cons: null, hist: 0.005 },
-  "780": { name: 'Trinidad and Tobago', pop: 1.503, co2: 35.536, cons: 22.352, hist: 1.676 },
-  "784": { name: 'United Arab Emirates', pop: 10.642, co2: 210.425, cons: 248.068, hist: 5.602 },
-  "788": { name: 'Tunisia', pop: 12.2, co2: 31.738, cons: 30.179, hist: 1.034 },
-  "792": { name: 'Turkey', pop: 87.271, co2: 486.945, cons: 483.031, hist: 12.375 },
-  "795": { name: 'Turkmenistan', pop: 7.364, co2: 95.421, cons: null, hist: 2.661 },
-  "796": { name: 'Turks and Caicos Islands', pop: 0.046, co2: 0.365, cons: null, hist: 0.007 },
-  "798": { name: 'Tuvalu', pop: 0.01, co2: 0.011, cons: null, hist: 0.0 },
-  "800": { name: 'Uganda', pop: 48.657, co2: 6.236, cons: 8.802, hist: 0.125 },
-  "804": { name: 'Ukraine', pop: 37.733, co2: 139.325, cons: 166.306, hist: 31.094 },
-  "807": { name: 'North Macedonia', pop: 1.832, co2: 7.338, cons: null, hist: 0.531 },
-  "818": { name: 'Egypt', pop: 114.536, co2: 250.23, cons: 253.428, hist: 7.213 },
-  "826": { name: 'United Kingdom', pop: 68.683, co2: 307.826, cons: 487.1, hist: 79.767 },
-  "834": { name: 'Tanzania', pop: 66.618, co2: 20.31, cons: 25.788, hist: 0.325 },
-  "840": { name: 'United States', pop: 343.477, co2: 4918.407, cons: 5431.659, hist: 429.962 },
-  "854": { name: 'Burkina Faso', pop: 23.026, co2: 6.308, cons: 5.801, hist: 0.089 },
-  "858": { name: 'Uruguay', pop: 3.388, co2: 7.627, cons: 10.782, hist: 0.469 },
-  "860": { name: 'Uzbekistan', pop: 35.652, co2: 122.872, cons: null, hist: 6.611 },
-  "862": { name: 'Venezuela', pop: 28.301, co2: 119.588, cons: 100.516, hist: 7.77 },
-  "876": { name: 'Wallis and Futuna', pop: 0.011, co2: 0.029, cons: null, hist: 0.001 },
-  "882": { name: 'Samoa', pop: 0.217, co2: 0.235, cons: null, hist: 0.008 },
-  "887": { name: 'Yemen', pop: 39.391, co2: 10.141, cons: null, hist: 0.698 },
-  "894": { name: 'Zambia', pop: 20.724, co2: 11.831, cons: 12.705, hist: 0.289 },
+  "004": {"name": "Afghanistan", "pop": 43.844, "co2": 11.199, "cons": null, "hist": 0.244},
+  "008": {"name": "Albania", "pop": 2.772, "co2": 4.636, "cons": 5.674, "hist": 0.318},
+  "012": {"name": "Algeria", "pop": 47.435, "co2": 206.629, "cons": null, "hist": 5.718},
+  "020": {"name": "Andorra", "pop": 0.083, "co2": 0.457, "cons": null, "hist": 0.017},
+  "024": {"name": "Angola", "pop": 39.04, "co2": 23.562, "cons": null, "hist": 0.777},
+  "028": {"name": "Antigua and Barbuda", "pop": 0.094, "co2": 0.665, "cons": null, "hist": 0.026},
+  "031": {"name": "Azerbaijan", "pop": 10.398, "co2": 38.391, "cons": 39.263, "hist": 2.649},
+  "032": {"name": "Argentina", "pop": 45.851, "co2": 176.175, "cons": 173.013, "hist": 9.441},
+  "036": {"name": "Australia", "pop": 26.974, "co2": 378.771, "cons": 369.252, "hist": 20.404},
+  "040": {"name": "Austria", "pop": 9.114, "co2": 55.156, "cons": 74.892, "hist": 5.82},
+  "044": {"name": "Bahamas", "pop": 0.403, "co2": 2.596, "cons": null, "hist": 0.175},
+  "048": {"name": "Bahrain", "pop": 1.643, "co2": 36.981, "cons": 22.08, "hist": 1.17},
+  "050": {"name": "Bangladesh", "pop": 175.687, "co2": 115.91, "cons": 183.382, "hist": 2.128},
+  "051": {"name": "Armenia", "pop": 2.952, "co2": 6.384, "cons": 7.19, "hist": 0.414},
+  "052": {"name": "Barbados", "pop": 0.283, "co2": 1.37, "cons": null, "hist": 0.065},
+  "056": {"name": "Belgium", "pop": 11.759, "co2": 86.996, "cons": 196.572, "hist": 13.059},
+  "060": {"name": "Bermuda", "pop": 0.065, "co2": 0.535, "cons": null, "hist": 0.031},
+  "064": {"name": "Bhutan", "pop": 0.797, "co2": 1.837, "cons": null, "hist": 0.032},
+  "068": {"name": "Bolivia", "pop": 12.582, "co2": 26.065, "cons": 26.534, "hist": 0.665},
+  "070": {"name": "Bosnia and Herzegovina", "pop": 3.14, "co2": 18.717, "cons": null, "hist": 1.06},
+  "072": {"name": "Botswana", "pop": 2.562, "co2": 6.928, "cons": 16.804, "hist": 0.194},
+  "076": {"name": "Brazil", "pop": 212.812, "co2": 496.686, "cons": 478.539, "hist": 18.718},
+  "084": {"name": "Belize", "pop": 0.423, "co2": 0.853, "cons": null, "hist": 0.023},
+  "090": {"name": "Solomon Islands", "pop": 0.839, "co2": 0.595, "cons": null, "hist": 0.014},
+  "092": {"name": "British Virgin Islands", "pop": 0.04, "co2": 0.188, "cons": null, "hist": 0.006},
+  "096": {"name": "Brunei", "pop": 0.466, "co2": 10.819, "cons": 8.864, "hist": 0.437},
+  "100": {"name": "Bulgaria", "pop": 6.715, "co2": 33.818, "cons": 34.588, "hist": 3.967},
+  "104": {"name": "Myanmar", "pop": 54.851, "co2": 35.171, "cons": null, "hist": 0.766},
+  "108": {"name": "Burundi", "pop": 14.39, "co2": 0.791, "cons": null, "hist": 0.017},
+  "112": {"name": "Belarus", "pop": 8.998, "co2": 53.105, "cons": 62.619, "hist": 5.112},
+  "116": {"name": "Cambodia", "pop": 17.848, "co2": 27.719, "cons": 44.272, "hist": 0.291},
+  "120": {"name": "Cameroon", "pop": 29.879, "co2": 8.247, "cons": 10.285, "hist": 0.308},
+  "124": {"name": "Canada", "pop": 40.127, "co2": 547.319, "cons": 523.551, "hist": 36.258},
+  "132": {"name": "Cape Verde", "pop": 0.527, "co2": 0.676, "cons": null, "hist": 0.018},
+  "140": {"name": "Central African Republic", "pop": 5.513, "co2": 0.436, "cons": null, "hist": 0.013},
+  "144": {"name": "Sri Lanka", "pop": 23.229, "co2": 19.455, "cons": 47.114, "hist": 0.58},
+  "148": {"name": "Chad", "pop": 21.004, "co2": 2.449, "cons": null, "hist": 0.052},
+  "152": {"name": "Chile", "pop": 19.86, "co2": 76.273, "cons": 84.344, "hist": 3.369},
+  "156": {"name": "China", "pop": 1416.096, "co2": 12417.493, "cons": 10892.651, "hist": 298.48},
+  "158": {"name": "Taiwan", "pop": 23.113, "co2": 250.102, "cons": 294.764, "hist": 10.335},
+  "170": {"name": "Colombia", "pop": 53.426, "co2": 96.067, "cons": 120.926, "hist": 3.958},
+  "174": {"name": "Comoros", "pop": 0.883, "co2": 0.586, "cons": null, "hist": 0.008},
+  "175": {"name": "Mayotte", "pop": 0.337, "co2": 0.254, "cons": null, "hist": 0.008},
+  "178": {"name": "Congo", "pop": 6.484, "co2": 8.359, "cons": null, "hist": 0.19},
+  "180": {"name": "Democratic Republic of Congo", "pop": 112.832, "co2": 4.501, "cons": null, "hist": 0.235},
+  "184": {"name": "Cook Islands", "pop": 0.013, "co2": 0.088, "cons": null, "hist": 0.003},
+  "188": {"name": "Costa Rica", "pop": 5.153, "co2": 9.552, "cons": 15.183, "hist": 0.297},
+  "191": {"name": "Croatia", "pop": 3.848, "co2": 19.219, "cons": 23.688, "hist": 1.202},
+  "192": {"name": "Cuba", "pop": 10.937, "co2": 23.709, "cons": null, "hist": 1.814},
+  "196": {"name": "Cyprus", "pop": 1.371, "co2": 7.294, "cons": 8.477, "hist": 0.326},
+  "203": {"name": "Czechia", "pop": 10.609, "co2": 77.976, "cons": 94.712, "hist": 12.396},
+  "204": {"name": "Benin", "pop": 14.814, "co2": 8.315, "cons": 8.882, "hist": 0.14},
+  "208": {"name": "Denmark", "pop": 6.003, "co2": 24.356, "cons": 47.83, "hist": 4.181},
+  "212": {"name": "Dominica", "pop": 0.066, "co2": 0.181, "cons": null, "hist": 0.006},
+  "214": {"name": "Dominican Republic", "pop": 11.52, "co2": 34.509, "cons": 40.501, "hist": 0.895},
+  "218": {"name": "Ecuador", "pop": 18.29, "co2": 45.675, "cons": 50.15, "hist": 1.416},
+  "222": {"name": "El Salvador", "pop": 6.366, "co2": 9.489, "cons": 11.82, "hist": 0.273},
+  "226": {"name": "Equatorial Guinea", "pop": 1.938, "co2": 6.079, "cons": null, "hist": 0.167},
+  "231": {"name": "Ethiopia", "pop": 135.472, "co2": 19.03, "cons": 23.867, "hist": 0.352},
+  "232": {"name": "Eritrea", "pop": 3.607, "co2": 0.78, "cons": null, "hist": 0.02},
+  "233": {"name": "Estonia", "pop": 1.344, "co2": 7.545, "cons": 12.139, "hist": 1.661},
+  "234": {"name": "Faroe Islands", "pop": 0.056, "co2": 0.773, "cons": null, "hist": 0.034},
+  "242": {"name": "Fiji", "pop": 0.933, "co2": 1.801, "cons": null, "hist": 0.055},
+  "246": {"name": "Finland", "pop": 5.623, "co2": 29.122, "cons": 46.238, "hist": 3.359},
+  "250": {"name": "France", "pop": 66.651, "co2": 255.347, "cons": 398.717, "hist": 40.376},
+  "258": {"name": "French Polynesia", "pop": 0.282, "co2": 1.022, "cons": null, "hist": 0.036},
+  "262": {"name": "Djibouti", "pop": 1.184, "co2": 0.638, "cons": null, "hist": 0.022},
+  "266": {"name": "Gabon", "pop": 2.593, "co2": 4.533, "cons": null, "hist": 0.299},
+  "268": {"name": "Georgia", "pop": 3.807, "co2": 12.099, "cons": 15.604, "hist": 0.663},
+  "270": {"name": "Gambia", "pop": 2.822, "co2": 0.912, "cons": null, "hist": 0.018},
+  "275": {"name": "Palestine", "pop": 5.59, "co2": 4.148, "cons": null, "hist": 0.081},
+  "276": {"name": "Germany", "pop": 84.075, "co2": 573.466, "cons": 756.225, "hist": 96.1},
+  "288": {"name": "Ghana", "pop": 35.064, "co2": 25.594, "cons": 27.373, "hist": 0.458},
+  "296": {"name": "Kiribati", "pop": 0.137, "co2": 0.08, "cons": null, "hist": 0.002},
+  "300": {"name": "Greece", "pop": 9.939, "co2": 53.844, "cons": 68.61, "hist": 4.332},
+  "304": {"name": "Greenland", "pop": 0.056, "co2": 0.612, "cons": null, "hist": 0.035},
+  "308": {"name": "Grenada", "pop": 0.117, "co2": 0.377, "cons": null, "hist": 0.01},
+  "320": {"name": "Guatemala", "pop": 18.688, "co2": 21.325, "cons": 27.141, "hist": 0.535},
+  "324": {"name": "Guinea", "pop": 15.1, "co2": 4.729, "cons": 7.066, "hist": 0.111},
+  "328": {"name": "Guyana", "pop": 0.836, "co2": 4.244, "cons": null, "hist": 0.119},
+  "332": {"name": "Haiti", "pop": 11.906, "co2": 1.484, "cons": null, "hist": 0.086},
+  "340": {"name": "Honduras", "pop": 11.006, "co2": 13.598, "cons": 11.377, "hist": 0.323},
+  "344": {"name": "Hong Kong", "pop": 7.396, "co2": 30.447, "cons": 147.778, "hist": 1.76},
+  "348": {"name": "Hungary", "pop": 9.632, "co2": 38.235, "cons": 55.97, "hist": 5.259},
+  "352": {"name": "Iceland", "pop": 0.398, "co2": 3.486, "cons": null, "hist": 0.173},
+  "356": {"name": "India", "pop": 1463.866, "co2": 3203.406, "cons": 2659.909, "hist": 69.19},
+  "360": {"name": "Indonesia", "pop": 285.721, "co2": 821.803, "cons": 760.658, "hist": 18.246},
+  "364": {"name": "Iran", "pop": 92.418, "co2": 855.278, "cons": 693.988, "hist": 22.583},
+  "368": {"name": "Iraq", "pop": 47.021, "co2": 254.994, "cons": null, "hist": 5.821},
+  "372": {"name": "Ireland", "pop": 5.308, "co2": 31.7, "cons": 38.936, "hist": 2.384},
+  "376": {"name": "Israel", "pop": 9.517, "co2": 58.874, "cons": 93.763, "hist": 2.723},
+  "380": {"name": "Italy", "pop": 59.146, "co2": 293.92, "cons": 419.089, "hist": 26.292},
+  "384": {"name": "Cote d'Ivoire", "pop": 32.712, "co2": 18.733, "cons": 19.024, "hist": 0.418},
+  "388": {"name": "Jamaica", "pop": 2.837, "co2": 8.292, "cons": 8.028, "hist": 0.484},
+  "392": {"name": "Japan", "pop": 123.103, "co2": 960.245, "cons": 1153.102, "hist": 71.267},
+  "398": {"name": "Kazakhstan", "pop": 20.844, "co2": 310.004, "cons": 222.832, "hist": 15.163},
+  "400": {"name": "Jordan", "pop": 11.521, "co2": 27.185, "cons": 34.179, "hist": 0.827},
+  "404": {"name": "Kenya", "pop": 57.532, "co2": 22.948, "cons": 32.873, "hist": 0.574},
+  "408": {"name": "North Korea", "pop": 26.571, "co2": 61.965, "cons": null, "hist": 5.542},
+  "410": {"name": "South Korea", "pop": 51.667, "co2": 580.635, "cons": 693.829, "hist": 21.252},
+  "414": {"name": "Kuwait", "pop": 5.026, "co2": 112.863, "cons": 114.282, "hist": 3.905},
+  "417": {"name": "Kyrgyzstan", "pop": 7.295, "co2": 12.423, "cons": 20.669, "hist": 0.883},
+  "418": {"name": "Laos", "pop": 7.873, "co2": 24.119, "cons": 3.842, "hist": 0.268},
+  "422": {"name": "Lebanon", "pop": 5.849, "co2": 16.668, "cons": null, "hist": 0.812},
+  "426": {"name": "Lesotho", "pop": 2.363, "co2": 0.758, "cons": null, "hist": 0.021},
+  "428": {"name": "Latvia", "pop": 1.854, "co2": 6.267, "cons": 13.089, "hist": 0.959},
+  "430": {"name": "Liberia", "pop": 5.731, "co2": 0.842, "cons": null, "hist": 0.051},
+  "434": {"name": "Libya", "pop": 7.459, "co2": 77.599, "cons": null, "hist": 2.589},
+  "438": {"name": "Liechtenstein", "pop": 0.04, "co2": 0.114, "cons": null, "hist": 0.01},
+  "440": {"name": "Lithuania", "pop": 2.83, "co2": 11.847, "cons": 20.318, "hist": 1.58},
+  "442": {"name": "Luxembourg", "pop": 0.68, "co2": 6.289, "cons": 7.237, "hist": 0.783},
+  "446": {"name": "Macao", "pop": 0.722, "co2": 0.978, "cons": null, "hist": 0.057},
+  "450": {"name": "Madagascar", "pop": 32.741, "co2": 4.611, "cons": 6.317, "hist": 0.116},
+  "454": {"name": "Malawi", "pop": 22.216, "co2": 1.932, "cons": 3.137, "hist": 0.06},
+  "458": {"name": "Malaysia", "pop": 35.978, "co2": 306.414, "cons": 292.086, "hist": 7.427},
+  "462": {"name": "Maldives", "pop": 0.53, "co2": 2.536, "cons": null, "hist": 0.036},
+  "466": {"name": "Mali", "pop": 25.199, "co2": 7.824, "cons": null, "hist": 0.108},
+  "470": {"name": "Malta", "pop": 0.545, "co2": 1.689, "cons": 14.112, "hist": 0.111},
+  "478": {"name": "Mauritania", "pop": 5.315, "co2": 5.813, "cons": null, "hist": 0.106},
+  "480": {"name": "Mauritius", "pop": 1.268, "co2": 4.941, "cons": 7.983, "hist": 0.138},
+  "484": {"name": "Mexico", "pop": 131.947, "co2": 470.882, "cons": 574.946, "hist": 22.325},
+  "492": {"name": "Monaco", "pop": 0.038, "co2": null, "cons": null, "hist": null},
+  "496": {"name": "Mongolia", "pop": 3.517, "co2": 41.7, "cons": 35.659, "hist": 0.782},
+  "498": {"name": "Moldova", "pop": 2.996, "co2": 5.522, "cons": null, "hist": 1.328},
+  "499": {"name": "Montenegro", "pop": 0.633, "co2": 2.597, "cons": null, "hist": 0.132},
+  "500": {"name": "Montserrat", "pop": 0.004, "co2": 0.023, "cons": null, "hist": 0.002},
+  "504": {"name": "Morocco", "pop": 38.431, "co2": 71.829, "cons": 70.217, "hist": 2.082},
+  "508": {"name": "Mozambique", "pop": 35.632, "co2": 8.733, "cons": 14.654, "hist": 0.229},
+  "512": {"name": "Oman", "pop": 5.495, "co2": 89.274, "cons": 84.614, "hist": 1.756},
+  "516": {"name": "Namibia", "pop": 3.093, "co2": 3.549, "cons": 10.065, "hist": 0.091},
+  "520": {"name": "Nauru", "pop": 0.012, "co2": 0.064, "cons": null, "hist": 0.005},
+  "524": {"name": "Nepal", "pop": 29.618, "co2": 16.12, "cons": 46.493, "hist": 0.232},
+  "528": {"name": "Netherlands", "pop": 18.347, "co2": 116.264, "cons": 153.546, "hist": 12.408},
+  "531": {"name": "Curacao", "pop": 0.185, "co2": 1.589, "cons": null, "hist": 0.556},
+  "533": {"name": "Aruba", "pop": 0.108, "co2": 0.915, "cons": null, "hist": 0.077},
+  "534": {"name": "Sint Maarten (Dutch part)", "pop": 0.044, "co2": 0.792, "cons": null, "hist": 0.082},
+  "535": {"name": "Bonaire Sint Eustatius and Saba", "pop": 0.031, "co2": 0.181, "cons": null, "hist": 0.011},
+  "540": {"name": "New Caledonia", "pop": 0.295, "co2": 5.153, "cons": null, "hist": 0.17},
+  "548": {"name": "Vanuatu", "pop": 0.335, "co2": 0.291, "cons": null, "hist": 0.006},
+  "554": {"name": "New Zealand", "pop": 5.252, "co2": 31.04, "cons": 41.559, "hist": 2.04},
+  "558": {"name": "Nicaragua", "pop": 7.008, "co2": 6.399, "cons": 7.973, "hist": 0.204},
+  "562": {"name": "Niger", "pop": 27.918, "co2": 3.631, "cons": null, "hist": 0.062},
+  "566": {"name": "Nigeria", "pop": 237.528, "co2": 142.289, "cons": 127.111, "hist": 4.842},
+  "570": {"name": "Niue", "pop": 0.002, "co2": 0.008, "cons": null, "hist": 0.0},
+  "578": {"name": "Norway", "pop": 5.623, "co2": 36.458, "cons": 38.34, "hist": 2.794},
+  "583": {"name": "Micronesia (country)", "pop": 0.114, "co2": 0.16, "cons": null, "hist": 0.005},
+  "584": {"name": "Marshall Islands", "pop": 0.036, "co2": 0.164, "cons": null, "hist": 0.004},
+  "585": {"name": "Palau", "pop": 0.018, "co2": 0.244, "cons": null, "hist": 0.012},
+  "586": {"name": "Pakistan", "pop": 255.22, "co2": 211.778, "cons": 224.183, "hist": 6.069},
+  "591": {"name": "Panama", "pop": 4.571, "co2": 12.575, "cons": 20.705, "hist": 0.368},
+  "598": {"name": "Papua New Guinea", "pop": 10.763, "co2": 8.689, "cons": null, "hist": 0.218},
+  "600": {"name": "Paraguay", "pop": 7.013, "co2": 8.498, "cons": 14.162, "hist": 0.219},
+  "604": {"name": "Peru", "pop": 34.577, "co2": 68.996, "cons": 78.023, "hist": 2.19},
+  "608": {"name": "Philippines", "pop": 116.787, "co2": 169.215, "cons": 230.137, "hist": 4.127},
+  "616": {"name": "Poland", "pop": 38.141, "co2": 283.728, "cons": 277.479, "hist": 29.332},
+  "620": {"name": "Portugal", "pop": 10.412, "co2": 36.906, "cons": 46.82, "hist": 2.804},
+  "624": {"name": "Guinea-Bissau", "pop": 2.25, "co2": 0.407, "cons": null, "hist": 0.009},
+  "626": {"name": "East Timor", "pop": 1.419, "co2": 0.66, "cons": null, "hist": 0.012},
+  "634": {"name": "Qatar", "pop": 3.116, "co2": 98.061, "cons": 77.362, "hist": 2.495},
+  "642": {"name": "Romania", "pop": 18.909, "co2": 63.217, "cons": 76.456, "hist": 8.783},
+  "643": {"name": "Russia", "pop": 143.997, "co2": 1766.671, "cons": 1464.426, "hist": 123.574},
+  "646": {"name": "Rwanda", "pop": 14.569, "co2": 2.09, "cons": 3.438, "hist": 0.039},
+  "654": {"name": "Saint Helena", "pop": 0.005, "co2": 0.012, "cons": null, "hist": 0.0},
+  "659": {"name": "Saint Kitts and Nevis", "pop": 0.047, "co2": 0.269, "cons": null, "hist": 0.008},
+  "660": {"name": "Anguilla", "pop": 0.015, "co2": 0.158, "cons": null, "hist": 0.004},
+  "662": {"name": "Saint Lucia", "pop": 0.18, "co2": 0.558, "cons": null, "hist": 0.017},
+  "666": {"name": "Saint Pierre and Miquelon", "pop": 0.006, "co2": 0.065, "cons": null, "hist": 0.004},
+  "670": {"name": "Saint Vincent and the Grenadines", "pop": 0.1, "co2": 0.262, "cons": null, "hist": 0.008},
+  "674": {"name": "San Marino", "pop": 0.034, "co2": null, "cons": null, "hist": null},
+  "678": {"name": "Sao Tome and Principe", "pop": 0.24, "co2": 0.149, "cons": null, "hist": 0.004},
+  "682": {"name": "Saudi Arabia", "pop": 34.566, "co2": 638.247, "cons": 631.961, "hist": 18.55},
+  "686": {"name": "Senegal", "pop": 18.932, "co2": 14.351, "cons": 19.833, "hist": 0.311},
+  "688": {"name": "Serbia", "pop": 6.689, "co2": 42.398, "cons": null, "hist": 2.988},
+  "690": {"name": "Seychelles", "pop": 0.133, "co2": 0.654, "cons": null, "hist": 0.017},
+  "694": {"name": "Sierra Leone", "pop": 8.82, "co2": 1.649, "cons": null, "hist": 0.044},
+  "702": {"name": "Singapore", "pop": 5.871, "co2": 54.144, "cons": 188.406, "hist": 2.346},
+  "703": {"name": "Slovakia", "pop": 5.475, "co2": 28.507, "cons": 34.069, "hist": 4.079},
+  "704": {"name": "Vietnam", "pop": 101.599, "co2": 374.687, "cons": 252.242, "hist": 6.056},
+  "705": {"name": "Slovenia", "pop": 2.117, "co2": 11.922, "cons": 19.777, "hist": 0.921},
+  "706": {"name": "Somalia", "pop": 19.655, "co2": 1.371, "cons": null, "hist": 0.043},
+  "710": {"name": "South Africa", "pop": 64.747, "co2": 460.126, "cons": 350.549, "hist": 23.346},
+  "716": {"name": "Zimbabwe", "pop": 16.951, "co2": 17.348, "cons": 16.137, "hist": 0.852},
+  "724": {"name": "Spain", "pop": 47.89, "co2": 210.493, "cons": 258.051, "hist": 15.801},
+  "728": {"name": "South Sudan", "pop": 12.189, "co2": 3.028, "cons": null, "hist": 0.055},
+  "729": {"name": "Sudan", "pop": 51.662, "co2": 12.937, "cons": null, "hist": 0.522},
+  "740": {"name": "Suriname", "pop": 0.64, "co2": 2.658, "cons": null, "hist": 0.129},
+  "748": {"name": "Eswatini", "pop": 1.256, "co2": 1.1, "cons": null, "hist": 0.046},
+  "752": {"name": "Sweden", "pop": 10.657, "co2": 39.997, "cons": 63.227, "hist": 5.153},
+  "756": {"name": "Switzerland", "pop": 8.967, "co2": 31.141, "cons": 116.622, "hist": 3.16},
+  "760": {"name": "Syria", "pop": 25.62, "co2": 28.998, "cons": null, "hist": 2.033},
+  "762": {"name": "Tajikistan", "pop": 10.787, "co2": 11.781, "cons": 14.442, "hist": 0.519},
+  "764": {"name": "Thailand", "pop": 71.62, "co2": 256.467, "cons": 308.194, "hist": 8.42},
+  "768": {"name": "Togo", "pop": 8.592, "co2": 3.043, "cons": 9.194, "hist": 0.08},
+  "776": {"name": "Tonga", "pop": 0.104, "co2": 0.164, "cons": null, "hist": 0.005},
+  "780": {"name": "Trinidad and Tobago", "pop": 1.511, "co2": 29.431, "cons": 19.491, "hist": 1.743},
+  "784": {"name": "United Arab Emirates", "pop": 11.346, "co2": 235.309, "cons": 256.573, "hist": 5.934},
+  "788": {"name": "Tunisia", "pop": 12.349, "co2": 32.691, "cons": 30.679, "hist": 1.088},
+  "792": {"name": "Turkey", "pop": 87.685, "co2": 485.938, "cons": 478.115, "hist": 13.277},
+  "795": {"name": "Turkmenistan", "pop": 7.619, "co2": 85.869, "cons": null, "hist": 2.777},
+  "796": {"name": "Turks and Caicos Islands", "pop": 0.047, "co2": 0.389, "cons": null, "hist": 0.008},
+  "798": {"name": "Tuvalu", "pop": 0.01, "co2": 0.012, "cons": null, "hist": 0.0},
+  "800": {"name": "Uganda", "pop": 51.385, "co2": 7.033, "cons": 8.391, "hist": 0.138},
+  "804": {"name": "Ukraine", "pop": 38.98, "co2": 138.765, "cons": 158.852, "hist": 31.09},
+  "807": {"name": "North Macedonia", "pop": 1.814, "co2": 6.614, "cons": null, "hist": 0.545},
+  "818": {"name": "Egypt", "pop": 118.366, "co2": 247.312, "cons": 263.598, "hist": 7.676},
+  "826": {"name": "United Kingdom", "pop": 69.551, "co2": 319.884, "cons": 494.241, "hist": 80.662},
+  "834": {"name": "Tanzania", "pop": 70.546, "co2": 19.632, "cons": 23.857, "hist": 0.36},
+  "840": {"name": "United States", "pop": 347.276, "co2": 5035.562, "cons": 5446.676, "hist": 439.343},
+  "854": {"name": "Burkina Faso", "pop": 24.075, "co2": 7.77, "cons": 5.511, "hist": 0.096},
+  "858": {"name": "Uruguay", "pop": 3.385, "co2": 7.681, "cons": 10.958, "hist": 0.478},
+  "860": {"name": "Uzbekistan", "pop": 37.053, "co2": 126.595, "cons": null, "hist": 6.833},
+  "862": {"name": "Venezuela", "pop": 28.517, "co2": 101.74, "cons": 80.985, "hist": 8.241},
+  "876": {"name": "Wallis and Futuna", "pop": 0.011, "co2": 0.032, "cons": null, "hist": 0.001},
+  "882": {"name": "Samoa", "pop": 0.219, "co2": 0.288, "cons": null, "hist": 0.008},
+  "887": {"name": "Yemen", "pop": 41.774, "co2": 19.044, "cons": null, "hist": 0.789},
+  "894": {"name": "Zambia", "pop": 21.914, "co2": 11.838, "cons": 12.273, "hist": 0.307},
 };
 
-const WORLD_TOTALS = {
-  pop: 8091.735,   // millions
-  population: 8091.735, // alias for pop (used by info panel)
-  co2: 38094.039,  // Mt
-  cons: 38094.039, // Mt (consumption ≈ territorial globally)
-  hist: 1810.525   // Gt
-};
-
-// Paris Agreement 1.5°C carbon budget (IPCC AR6, 50% probability)
-// ~500 Gt CO₂ remaining from 2020, minus ~150 Gt emitted 2020–2023 ≈ 350 Gt from 2024
-// Spread linearly to 2050 (net-zero target) = 27 years
-const PARIS_BUDGET = {
-  remaining: 350,        // Gt CO₂ remaining from 2024
-  targetYear: 2050,
-  dataYear: 2023,
-  yearsLeft: 27,         // 2050 - 2023
-  annualGlobal: 350000 / 27,  // Mt/year (~12,963 Mt)
-  perCapita: (350000 / 27) / 8091.735  // t/person/year (~1.6 t)
-};
-
-// Paris Agreement 2.0°C carbon budget (IPCC AR6, 67% probability)
-// ~1,350 Gt remaining from 2020, minus ~150 Gt emitted 2020–2023 ≈ 1,100 Gt from 2024
-const PARIS_2_BUDGET = {
-  remaining: 1100,       // Gt CO₂ remaining from 2024
-  targetYear: 2050,
-  dataYear: 2023,
-  yearsLeft: 27,
-  annualGlobal: 1100000 / 27, // Mt/year (~40,741 Mt)
-  perCapita: (1100000 / 27) / 8091.735  // t/person/year (~5.0 t)
-};
-
-function getWorldPerCapita(metric = "co2") {
-  if (metric === "paris") return PARIS_BUDGET.perCapita;
-  if (metric === "paris2") return PARIS_2_BUDGET.perCapita;
-  if (metric === "hist") return WORLD_TOTALS.hist / WORLD_TOTALS.pop;
-  const key = metric === "cons" ? "cons" : "co2";
-  return WORLD_TOTALS[key] / WORLD_TOTALS.pop;
-}
-
-function getBudgetRatio(isoCode, metric = "co2") {
-  const d = CO2_DATA[isoCode];
-  if (!d || !d.pop) return null;
-  let val;
-  if (metric === "paris" || metric === "paris2") {
-    val = d.cons != null ? d.cons : d.co2; // prefer consumption, fall back to territorial
-  } else if (metric === "hist") {
-    val = d.hist;
-  } else if (metric === "cons") {
-    val = d.cons != null ? d.cons : d.co2;
-  } else {
-    val = d.co2;
-  }
-  if (val == null) return null;
-  const perCapita = val / d.pop;
-  const worldPC = getWorldPerCapita(metric);
-  return perCapita / worldPC;
-}
-
-function getCountryStats(isoCode, metric = 'co2') {
-  const d = CO2_DATA[isoCode];
-  if (!d) return null;
-  const ratio = getBudgetRatio(isoCode, metric);
-  let metricPerCapita = null;
-  let usedFallback = false;
-  if (metric === 'paris' || metric === 'paris2') {
-    const val = d.cons != null ? d.cons : d.co2;
-    usedFallback = d.cons == null;
-    if (val != null && d.pop) metricPerCapita = val / d.pop;
-  } else if (metric === 'hist') {
-    if (d.hist != null && d.pop) metricPerCapita = (d.hist * 1000) / d.pop;
-  } else if (metric === 'cons') {
-    const val = d.cons != null ? d.cons : d.co2;
-    usedFallback = d.cons == null;
-    if (val != null && d.pop) metricPerCapita = val / d.pop;
-  } else {
-    if (d.co2 != null && d.pop) metricPerCapita = d.co2 / d.pop;
-  }
-  return {
-    name: d.name,
-    population: d.pop,
-    co2: d.co2,
-    cons: d.cons,
-    hist: d.hist,
-    consumption: d.cons,
-    historical: d.hist,
-    ratio: ratio,
-    metricPerCapita: metricPerCapita,
-    usedFallback: usedFallback,
-    co2PerCapita: d.co2 && d.pop ? +(d.co2 / d.pop).toFixed(4) : null,
-    consPerCapita: d.cons != null && d.pop ? +(d.cons / d.pop).toFixed(4) : null,
-    histPerCapita: d.hist != null && d.pop ? +(d.hist / d.pop).toFixed(6) : null
-  };
-}
+const WORLD_TOTALS = {"pop": 8231.613, "co2": 38995.105, "cons": 38995.109, "hist": 1886.833, "emittedSince2020": 225.2};

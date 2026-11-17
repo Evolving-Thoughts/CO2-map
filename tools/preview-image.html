@@ -1,0 +1,192 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <title>Preview image for shared links</title>
+  <!--
+    Draws og-image.png (1200 x 630), the picture messengers and social
+    networks show for a link to the site: the world in the colours of the
+    1.5 °C view, in an equal-area projection.
+
+    Open this page through a local server (python -m http.server, then
+    /tools/preview-image.html), save the picture as og-image.png in the
+    project root and commit it. Do this again after a data update if the
+    colours should follow the new data.
+  -->
+  <style>
+    @font-face {
+      font-family: 'Source Sans 3';
+      font-weight: 200 900;
+      src: url('../vendor/source-sans-3/source-sans-3-latin.woff2') format('woff2');
+    }
+    body { margin: 24px; font: 16px/1.5 'Source Sans 3', sans-serif; color: #1a1a2e; background: #f5f6f8; }
+    canvas { display: block; max-width: 100%; height: auto; box-shadow: 0 2px 12px rgba(20, 28, 45, 0.12); }
+    a { color: #1d4ed8; }
+  </style>
+  <script src="../vendor/topojson-client-3.1.0/topojson-client.min.js"></script>
+  <script src="../vendor/world-atlas-2.0.2/countries-50m.js"></script>
+</head>
+<body>
+  <p><a id="save" download="og-image.png" href="#">Save as og-image.png</a> (1200 × 630, data year <span id="year"></span>)</p>
+  <canvas id="picture" width="1200" height="630"></canvas>
+
+  <script>
+    const WIDTH = 1200, HEIGHT = 630;
+    const FONT = "'Source Sans 3', 'Segoe UI', sans-serif";
+    const INK = '#1a1a2e', MUTED = '#3a4150', ACCENT = '#2563eb';
+
+    // Equal Earth projection (Šavrič, Patterson, Jenny 2018): x within
+    // ±2.7066, y within ±1.3173.
+    const A1 = 1.340264, A2 = -0.081106, A3 = 0.000893, A4 = 0.003796, M = Math.sqrt(3) / 2;
+    function equalEarth(lng, lat) {
+      const l = lng * Math.PI / 180, p = lat * Math.PI / 180;
+      const t = Math.asin(M * Math.sin(p)), t2 = t * t, t6 = t2 * t2 * t2;
+      return [
+        l * Math.cos(t) / (M * (A1 + 3 * A2 * t2 + t6 * (7 * A3 + 9 * A4 * t2))),
+        t * (A1 + A2 * t2 + t6 * (A3 + A4 * t2)),
+      ];
+    }
+
+    // A ring that jumps across the antimeridian is drawn as one closed
+    // piece per side.
+    function ringPieces(ring) {
+      const runs = [[]];
+      for (let i = 0; i < ring.length; i++) {
+        if (i && Math.abs(ring[i][0] - ring[i - 1][0]) > 180) runs.push([]);
+        runs[runs.length - 1].push(ring[i]);
+      }
+      if (runs.length > 1) runs[0] = runs.pop().concat(runs[0]);
+      return runs;
+    }
+
+    function drawMap(ctx) {
+      const simple = simplifyTopology(WORLD_ATLAS, 0.12);
+      const features = assignFeatureIds(topojson.feature(simple, simple.objects.countries)).features
+        .filter(feature => feature.id !== ANTARCTICA_ID);
+      const scale = 1150 / (2 * 2.7066);
+      const x0 = WIDTH / 2, y0 = 138 + scale * equalEarth(0, 84)[1];
+
+      ctx.lineJoin = 'round';
+      ctx.lineWidth = 0.45;
+      ctx.strokeStyle = 'rgba(58, 65, 80, 0.55)';
+      for (const feature of features) {
+        ctx.beginPath();
+        for (const polygon of geometryPolygons(feature.geometry)) {
+          for (const ring of polygon) {
+            for (const piece of ringPieces(ring)) {
+              piece.forEach((c, i) => {
+                const [x, y] = equalEarth(c[0], c[1]);
+                if (i) ctx.lineTo(x0 + scale * x, y0 - scale * y);
+                else ctx.moveTo(x0 + scale * x, y0 - scale * y);
+              });
+              ctx.closePath();
+            }
+          }
+        }
+        ctx.fillStyle = getRatioColor(getBudgetRatio(feature.id, 'paris'));
+        ctx.fill('evenodd');
+        ctx.stroke();
+      }
+    }
+
+    function roundedRect(ctx, x, y, width, height, radius) {
+      ctx.beginPath();
+      ctx.moveTo(x + radius, y);
+      ctx.arcTo(x + width, y, x + width, y + height, radius);
+      ctx.arcTo(x + width, y + height, x, y + height, radius);
+      ctx.arcTo(x, y + height, x, y, radius);
+      ctx.arcTo(x, y, x + width, y, radius);
+      ctx.closePath();
+    }
+
+    function drawTexts(ctx, mark) {
+      ctx.drawImage(mark, 44, 34, 62, 62);
+
+      ctx.textBaseline = 'alphabetic';
+      ctx.font = `700 46px ${FONT}`;
+      ctx.fillStyle = INK;
+      ctx.fillText('CO₂ ', 124, 66);
+      ctx.fillStyle = ACCENT;
+      ctx.fillText('Budget Map', 124 + ctx.measureText('CO₂ ').width, 66);
+
+      ctx.font = `500 24px ${FONT}`;
+      ctx.fillStyle = MUTED;
+      ctx.fillText('Who uses more than their fair share of the remaining CO₂ budget?', 125, 100);
+
+      ctx.font = `600 19px ${FONT}`;
+      ctx.textAlign = 'right';
+      ctx.fillText('Evolving Thoughts', WIDTH - 44, 62);
+      ctx.textAlign = 'left';
+
+      // Legend card
+      const left = 44, top = 522;
+      ctx.fillStyle = 'rgba(255, 255, 255, 0.96)';
+      roundedRect(ctx, left, top, 312, 76, 12);
+      ctx.fill();
+      ctx.font = `600 16px ${FONT}`;
+      ctx.fillStyle = INK;
+      ctx.fillText('Share of the fair 1.5 °C budget', left + 24, top + 28);
+
+      const steps = [0.1, 0.25, 0.5, 0.75, 1, 1.5, 2, 3, 4, 6, 9, 12];
+      const stepWidth = 264 / steps.length;
+      ctx.save();
+      roundedRect(ctx, left + 24, top + 38, 264, 12, 3);
+      ctx.clip();
+      steps.forEach((ratio, i) => {
+        ctx.fillStyle = getRatioColor(ratio);
+        ctx.fillRect(left + 24 + i * stepWidth, top + 38, stepWidth + 0.5, 12);
+      });
+      ctx.restore();
+
+      ctx.font = `400 13px ${FONT}`;
+      ctx.fillStyle = '#4b5563';
+      ctx.fillText('10 %', left + 24, top + 67);
+      ctx.textAlign = 'right';
+      ctx.fillText('1,200 %', left + 288, top + 67);
+      ctx.textAlign = 'left';
+      ctx.font = `700 13px ${FONT}`;
+      ctx.fillStyle = INK;
+      ctx.fillText('100 %', left + 112, top + 67);
+    }
+
+    // The app's data, assumptions and colours. Loaded with a fresh address
+    // each time, so the picture never comes from a cached, older data file.
+    function loadAppScripts() {
+      const stamp = Date.now();
+      return ['co2data', 'config', 'metrics', 'geo', 'state'].reduce((before, name) => before.then(() =>
+        new Promise((resolve, reject) => {
+          const script = document.createElement('script');
+          script.src = `../js/${name}.js?${stamp}`;
+          script.onload = resolve;
+          script.onerror = () => reject(new Error(`Could not load js/${name}.js`));
+          document.head.appendChild(script);
+        })), Promise.resolve());
+    }
+
+    // Resolves once the picture is drawn; used when the picture is made
+    // by a script instead of by hand.
+    window.previewImageReady = (async () => {
+      await loadAppScripts();
+      const mark = new Image();
+      mark.src = '../favicon.svg';
+      await Promise.all([
+        mark.decode(),
+        document.fonts.load(`700 46px 'Source Sans 3'`),
+        document.fonts.load(`500 24px 'Source Sans 3'`),
+        document.fonts.load(`400 13px 'Source Sans 3'`),
+      ]);
+
+      const canvas = document.getElementById('picture');
+      const ctx = canvas.getContext('2d');
+      ctx.fillStyle = OCEAN_COLOR;
+      ctx.fillRect(0, 0, WIDTH, HEIGHT);
+      drawMap(ctx);
+      drawTexts(ctx, mark);
+
+      document.getElementById('year').textContent = DATA_META.dataYear;
+      document.getElementById('save').href = canvas.toDataURL('image/png');
+      return canvas;
+    })();
+  </script>
+</body>
+</html>
