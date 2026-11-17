@@ -4,121 +4,217 @@
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
   <title>CO₂ Budget Map — Who's Using More Than Their Fair Share?</title>
+  <meta name="description" content="An interactive world map that shows which countries emit more CO₂ per person than their fair share of the remaining Paris budget, and which emit less.">
+  <link rel="canonical" href="https://evolving-thoughts.github.io/CO2-map/">
+  <meta name="theme-color" content="#ffffff">
 
-  <!-- Fonts -->
-  <link rel="preconnect" href="https://fonts.googleapis.com">
-  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
-  <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800&display=swap" rel="stylesheet">
+  <!-- Link previews -->
+  <meta property="og:type" content="website">
+  <meta property="og:site_name" content="Evolving Thoughts">
+  <meta property="og:title" content="CO₂ Budget Map — Who's Using More Than Their Fair Share?">
+  <meta property="og:description" content="Give every person the same share of the remaining CO₂ budget. This map shows which countries stay within it and which do not.">
+  <meta property="og:url" content="https://evolving-thoughts.github.io/CO2-map/">
+  <meta property="og:locale" content="en_US">
+  <meta property="og:locale:alternate" content="de_DE">
+  <meta property="og:image" content="https://evolving-thoughts.github.io/CO2-map/og-image.png">
+  <meta property="og:image:width" content="1200">
+  <meta property="og:image:height" content="630">
+  <meta property="og:image:alt" content="World map with every country coloured from green to dark red by its share of a fair CO₂ budget.">
+  <meta name="twitter:card" content="summary_large_image">
+
+  <link rel="icon" href="favicon.svg" type="image/svg+xml">
+
+  <!-- Everything is served from this site: no other server sees a visit
+       (see vendor/README.md for what the third-party files are). -->
+
+  <!-- Font (declared in css/style.css) -->
+  <link rel="preload" href="vendor/source-sans-3/source-sans-3-latin.woff2" as="font" type="font/woff2" crossorigin>
 
   <!-- Leaflet -->
-  <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css" integrity="sha384-sHL9NAb7lN7rfvG5lfHpm643Xkcjzp4jFvuavGOndn6pjVqS6ny56CAt3nsEVT4H" crossorigin="anonymous" />
-  <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js" integrity="sha384-cxOPjt7s7Iz04uaHJceBmS+qpjv2JkIHNVcuOrM+YHwZOmJGBXI00mdUXEq65HTH" crossorigin="anonymous"></script>
-
-  <!-- TopoJSON Client (to decode world-atlas data) -->
-  <script src="https://unpkg.com/topojson-client@3/dist/topojson-client.min.js" integrity="sha384-Ukv1p/xTma6P4/2bY5KzWBw+ydSpXmhCMtyciIQVDJ1RmOxtCYNMF1uXT9T63H67" crossorigin="anonymous"></script>
-
-  <!-- Globe.gl (3D globe view) -->
-  <script src="//cdn.jsdelivr.net/npm/globe.gl"></script>
+  <link rel="stylesheet" href="vendor/leaflet-1.9.4/leaflet.css">
 
   <!-- App Styles -->
-  <link rel="stylesheet" href="css/style.css">
+  <link rel="stylesheet" href="css/style.css?v=10">
+
+  <!-- Libraries and country shapes: exact versions, kept in vendor/. The
+       globe libraries are loaded later, in the background (js/globe.js). -->
+  <script defer src="vendor/leaflet-1.9.4/leaflet.js"></script>
+  <script defer src="vendor/topojson-client-3.1.0/topojson-client.min.js"></script>
+  <script defer src="vendor/world-atlas-2.0.2/countries-50m.js"></script>
+
+  <!-- App: texts, data, assumptions, calculations, then the interface.
+       The ?v= on local files is replaced with the commit id when the site
+       is published (.github/workflows/pages.yml), so no browser mixes old
+       and new files. The number here is only a stand-in. -->
+  <script defer src="js/i18n.js?v=10"></script>
+  <script defer src="js/co2data.js?v=10"></script>
+  <script defer src="js/config.js?v=10"></script>
+  <script defer src="js/metrics.js?v=10"></script>
+  <script defer src="js/geo.js?v=10"></script>
+  <script defer src="js/state.js?v=10"></script>
+  <script defer src="js/map.js?v=10"></script>
+  <script defer src="js/globe.js?v=10"></script>
+  <script defer src="js/ui.js?v=10"></script>
+  <script defer src="js/app.js?v=10"></script>
+
+  <!-- Page views, counted without cookies (GoatCounter; not on localhost) -->
+  <script data-goatcounter="https://co2-map.goatcounter.com/count" async src="vendor/goatcounter/count.v5.js"></script>
 </head>
 <body>
 
+  <!-- Icons (one stroke weight, referenced with <use>) -->
+  <svg class="icon-sprite" aria-hidden="true" focusable="false">
+    <symbol id="i-globe" viewBox="0 0 24 24"><circle cx="12" cy="12" r="9"/><path d="M3 12h18M12 3c2.5 2.7 3.8 5.7 3.8 9s-1.3 6.3-3.8 9c-2.5-2.7-3.8-5.7-3.8-9S9.5 5.7 12 3z"/></symbol>
+    <symbol id="i-map" viewBox="0 0 24 24"><path d="M9 4 3 6.5V20l6-2.5 6 2.5 6-2.5V4l-6 2.5L9 4zM9 4v13.5M15 6.5V20"/></symbol>
+    <symbol id="i-list" viewBox="0 0 24 24"><path d="M9 6h11M9 12h11M9 18h11M4.5 6h.01M4.5 12h.01M4.5 18h.01"/></symbol>
+    <symbol id="i-share" viewBox="0 0 24 24"><path d="M12 15V4m0 0L8 8m4-4 4 4M5 12v6a2 2 0 0 0 2 2h10a2 2 0 0 0 2-2v-6"/></symbol>
+    <symbol id="i-close" viewBox="0 0 24 24"><path d="M6 6l12 12M18 6 6 18"/></symbol>
+    <symbol id="i-chevron" viewBox="0 0 24 24"><path d="M6 9l6 6 6-6"/></symbol>
+    <symbol id="i-sliders" viewBox="0 0 24 24"><path d="M4 7h9M19 7h1M4 17h1M11 17h9"/><circle cx="16" cy="7" r="2.5"/><circle cx="8" cy="17" r="2.5"/></symbol>
+    <symbol id="i-resize" viewBox="0 0 24 24"><path d="M4 14v6h6M20 10V4h-6M4 20l7-7M20 4l-7 7"/></symbol>
+    <symbol id="i-undo" viewBox="0 0 24 24"><path d="M9 14 4 9l5-5M4 9h10a6 6 0 0 1 0 12h-3"/></symbol>
+    <symbol id="i-search" viewBox="0 0 24 24"><circle cx="11" cy="11" r="6.5"/><path d="M16 16l4.5 4.5"/></symbol>
+  </svg>
+
   <!-- Header -->
-  <header class="header">
-    <div class="header-title">CO₂ <span>Budget Map</span></div>
-    <div class="header-subtitle">See how countries compare to a fair per-capita carbon budget</div>
-    <span class="header-summary" id="header-summary"></span>
-    <div class="lang-switcher">
-      <button class="lang-btn active" data-lang="en">EN</button>
-      <button class="lang-btn" data-lang="de">DE</button>
+  <header class="header" id="header">
+    <div class="brand">
+      <svg class="brand-mark" viewBox="0 0 32 32" aria-hidden="true" focusable="false">
+        <circle class="brand-mark-fill" cx="16" cy="16" r="14"/>
+        <circle class="brand-mark-outline" cx="16" cy="16" r="7.5"/>
+      </svg>
+      <div class="brand-text">
+        <h1 class="brand-title"><span data-i18n="titleA">CO₂ </span><span class="brand-accent" data-i18n="titleB">Budget Map</span></h1>
+        <a class="brand-byline" href="https://github.com/Evolving-Thoughts" target="_blank" rel="noopener">Evolving Thoughts</a>
+      </div>
     </div>
-    <button class="header-collapse-btn" id="header-collapse" title="Toggle settings" aria-label="Toggle settings bar">
-      <svg width="18" height="18" viewBox="0 0 18 18" fill="none"><path d="M4 11l5-5 5 5" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/></svg>
+
+    <button class="settings-toggle" id="settings-toggle" type="button" aria-expanded="true" aria-controls="header-controls">
+      <svg class="icon"><use href="#i-sliders"/></svg>
+      <span class="sr-only" data-i18n="settings">View settings</span>
+      <span id="header-summary"></span>
+      <svg class="icon settings-chevron"><use href="#i-chevron"/></svg>
     </button>
 
-    <div class="header-controls">
-      <div class="metric-buttons" role="radiogroup" aria-label="Emission metric">
-        <button class="metric-btn active" data-metric="paris" role="radio" aria-checked="true">
-          Paris 1.5°C
-          <span class="metric-info">?<span class="metric-tooltip">Compares current emissions to a Paris Agreement–aligned budget. The remaining ~350 Gt CO₂ for 1.5°C (IPCC AR6, 50% probability) is split equally per capita and spread to 2050 — giving each person ~1.6 t/year. A ratio of 1× means exactly on track; most countries far exceed it.</span></span>
-        </button>
-        <button class="metric-btn" data-metric="paris2" role="radio" aria-checked="false">
-          Paris 2.0°C
-          <span class="metric-info">?<span class="metric-tooltip">Same approach but for the 2°C target. The remaining ~1,100 Gt CO₂ (IPCC AR6, 67% probability) spread to 2050 gives each person ~5.0 t/year — a less ambitious but still transformative goal.</span></span>
-        </button>
-        <button class="metric-btn" data-metric="co2" role="radio" aria-checked="false">
-          Territorial
-          <span class="metric-info">?<span class="metric-tooltip">CO₂ emitted within a country's borders — from power plants, factories, cars, etc. located in that country.</span></span>
-        </button>
-        <button class="metric-btn" data-metric="cons" role="radio" aria-checked="false">
-          Consumption
-          <span class="metric-info">?<span class="metric-tooltip">CO₂ caused by a country's consumption, including emissions embedded in imports and excluding exports. Reflects a country's lifestyle footprint.</span></span>
-        </button>
-        <button class="metric-btn" data-metric="hist" role="radio" aria-checked="false">
-          Historical
-          <span class="metric-info">?<span class="metric-tooltip">Cumulative CO₂ emitted since 1750, divided by today's population. This is a rough proxy — it doesn't account for population changes over time, so countries that grew fast (e.g. India) look lower, and slow-growth countries (e.g. UK) look higher. Still, it's the standard way to approximate each country's historical climate debt per person.</span></span>
-        </button>
+    <div class="header-controls" id="header-controls">
+      <div class="metric-groups" id="metric-groups" role="radiogroup" data-i18n-attr="aria-label:metricsLabel">
+        <div class="metric-group">
+          <span class="metric-group-label" data-i18n="groupFair">Fair share</span>
+          <div class="segmented">
+            <button class="metric-btn active" type="button" data-metric="paris" role="radio" aria-checked="true"></button>
+            <button class="metric-btn" type="button" data-metric="paris2" role="radio" aria-checked="false" tabindex="-1"></button>
+          </div>
+        </div>
+        <div class="metric-group">
+          <span class="metric-group-label" data-i18n="groupWorld">World average</span>
+          <div class="segmented">
+            <button class="metric-btn" type="button" data-metric="co2" role="radio" aria-checked="false" tabindex="-1"></button>
+            <button class="metric-btn" type="button" data-metric="cons" role="radio" aria-checked="false" tabindex="-1"></button>
+            <button class="metric-btn" type="button" data-metric="hist" role="radio" aria-checked="false" tabindex="-1"></button>
+          </div>
+        </div>
       </div>
 
-      <div class="toggle-switch">
-        <label class="switch">
-          <input type="checkbox" id="scale-toggle">
-          <span class="slider"></span>
+      <div class="toggles">
+        <label class="toggle">
+          <input type="checkbox" id="scale-toggle" role="switch">
+          <span class="toggle-track" aria-hidden="true"></span>
+          <span data-i18n="scaleToggle">Resize countries</span>
         </label>
-        <label for="scale-toggle" id="toggle-label">Actual Size</label>
-      </div>
-
-      <div class="toggle-switch">
-        <label class="switch">
-          <input type="checkbox" id="colorblind-toggle">
-          <span class="slider"></span>
+        <label class="toggle">
+          <input type="checkbox" id="colorblind-toggle" role="switch">
+          <span class="toggle-track" aria-hidden="true"></span>
+          <span data-i18n="colorblind">Colorblind</span>
         </label>
-        <label for="colorblind-toggle">Colorblind</label>
       </div>
 
-      <button class="projection-toggle-btn" id="projection-toggle" title="Switch to globe view">🌐 Globe</button>
-      <button class="ranking-toggle-btn" id="ranking-toggle" title="Show country ranking">🏆 Ranking</button>
+      <div class="header-actions">
+        <button class="btn" id="projection-toggle" type="button">
+          <svg class="icon"><use id="projection-icon" href="#i-globe"/></svg>
+          <span id="projection-label" data-i18n="globeView">Globe</span>
+        </button>
+        <button class="btn" id="ranking-toggle" type="button" aria-expanded="false" aria-controls="ranking-panel">
+          <svg class="icon"><use href="#i-list"/></svg>
+          <span data-i18n="ranking">Ranking</span>
+        </button>
+        <button class="btn" id="share-view" type="button">
+          <svg class="icon"><use href="#i-share"/></svg>
+          <span data-i18n="share">Share</span>
+        </button>
+      </div>
+    </div>
+
+    <div class="lang-switcher" role="group" data-i18n-attr="aria-label:languageLabel">
+      <button class="lang-btn" type="button" data-lang="en" lang="en" aria-label="English">EN</button>
+      <button class="lang-btn" type="button" data-lang="de" lang="de" aria-label="Deutsch">DE</button>
     </div>
   </header>
 
-  <!-- Ranking Panel (left sidebar) -->
-  <div id="ranking-panel">
-    <div class="ranking-header">
-      <h3>Country Ranking</h3>
-      <button class="panel-close" id="ranking-close" title="Close">&times;</button>
+  <!-- Ranking Panel (left sidebar, bottom sheet on phones) -->
+  <aside id="ranking-panel" aria-labelledby="ranking-title" inert>
+    <div class="panel-head">
+      <h2 id="ranking-title" data-i18n="countryRanking">Country ranking</h2>
+      <button class="icon-btn" id="ranking-close" type="button" data-i18n-attr="aria-label:close">
+        <svg class="icon"><use href="#i-close"/></svg>
+      </button>
     </div>
-    <div id="ranking-list"></div>
+    <label class="ranking-search">
+      <svg class="icon"><use href="#i-search"/></svg>
+      <input type="search" id="ranking-search" autocomplete="off" spellcheck="false" data-i18n-attr="placeholder:searchCountry;aria-label:searchCountry">
+    </label>
+    <p class="ranking-hint" id="ranking-hint"></p>
+    <ol id="ranking-list"></ol>
+    <p class="ranking-empty" id="ranking-empty" data-i18n="noMatch" hidden>No country matches.</p>
+  </aside>
+
+  <main>
+    <p class="sr-only" id="map-hint" data-i18n="mapHint">The map needs a pointer. Open the ranking to browse and select countries with the keyboard.</p>
+
+    <!-- Map Container -->
+    <div id="map" role="application" aria-describedby="map-hint" data-i18n-attr="aria-label:mapLabel"></div>
+
+    <!-- Globe Container (3D view, hidden by default) -->
+    <div id="globe" role="application" aria-describedby="map-hint" data-i18n-attr="aria-label:globeLabel"></div>
+  </main>
+
+  <!-- Info Panel (right sidebar, bottom sheet on phones) -->
+  <aside id="info-panel" aria-labelledby="info-title" inert></aside>
+
+  <!-- Key: the finding in one sentence, the color scale, sources -->
+  <section id="key" data-i18n-attr="aria-label:keyLabel">
+    <p class="key-finding" id="key-finding"></p>
+    <p class="key-basis" id="key-basis"></p>
+    <div id="legend"></div>
+    <p class="key-foot">
+      <span><span data-i18n="dataBy">Data:</span> <a href="https://github.com/owid/co2-data" target="_blank" rel="noopener">Our World in Data</a></span>
+      <button class="link-btn" id="about-open" type="button" data-i18n="aboutLink">How this is calculated</button>
+    </p>
+  </section>
+
+  <!-- Method and sources -->
+  <dialog id="about" aria-labelledby="about-title">
+    <div class="about-head">
+      <h2 id="about-title" data-i18n="aboutTitle">How this is calculated</h2>
+      <button class="icon-btn" id="about-close" type="button" data-i18n-attr="aria-label:close">
+        <svg class="icon"><use href="#i-close"/></svg>
+      </button>
+    </div>
+    <div class="about-body" id="about-body"></div>
+  </dialog>
+
+  <!-- Loading and error state -->
+  <div id="loading" role="status">
+    <div class="spinner" id="loading-spinner" aria-hidden="true"></div>
+    <p id="loading-text" data-i18n="loading">Loading map data…</p>
+    <button class="btn btn-solid" id="loading-retry" type="button" data-i18n="retry" hidden>Try again</button>
   </div>
 
-  <!-- Map Container -->
-  <div id="map" role="application" aria-label="Interactive CO₂ emissions world map"></div>
+  <!-- Short confirmations ("Link copied") -->
+  <div id="toast" role="status" aria-live="polite"></div>
 
-  <!-- Globe Container (3D view, hidden by default) -->
-  <div id="globe"></div>
-
-  <!-- Info Panel (right sidebar) -->
-  <div id="info-panel"></div>
-
-  <!-- Legend -->
-  <div id="legend"></div>
-
-  <!-- Source Attribution -->
-  <div id="attribution">
-    Data: <a href="https://github.com/owid/co2-data" target="_blank" rel="noopener">Our World in Data</a> · <a href="https://globalcarbonbudget.org/" target="_blank" rel="noopener">Global Carbon Project</a> (2024)
-  </div>
-
-  <!-- Loading Overlay -->
-  <div id="loading">
-    <div class="spinner"></div>
-    <p>Loading map data…</p>
-  </div>
-
-  <!-- App Scripts -->
-  <script src="js/i18n.js"></script>
-  <script src="js/co2data.js"></script>
-  <script src="js/app.js"></script>
+  <noscript>
+    <p class="noscript">This map needs JavaScript. / Diese Karte braucht JavaScript.</p>
+  </noscript>
 
 </body>
 </html>

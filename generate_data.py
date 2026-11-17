@@ -1,17 +1,41 @@
 """
-Generate co2data.js from Our World in Data CO2 dataset.
-Uses 2023 data as primary year, falls back to 2022 where needed.
+Generate js/co2data.js from the Our World in Data CO2 dataset.
+
+Usage:
+    python generate_data.py [path/to/owid-co2-data.csv] [--year 2024] [--force]
+
+Download the CSV from https://github.com/owid/co2-data and pass its path
+(default: ./owid-co2-data.csv). Without --year the newest complete year in
+the file is used.
+
+The file is only rewritten when the data differs from what is there, and
+never with an older year or far fewer countries (unless --force). The
+workflow in .github/workflows/data.yml runs this on a schedule.
+
+The script writes ONLY generated data: CO2_DATA, WORLD_TOTALS and DATA_META.
+Everything maintained by hand lives elsewhere and is never touched:
+    js/config.js   territory mappings and the Paris budget assumptions
+    js/metrics.js  the calculations built on top of the data
 """
+import argparse
 import csv
+import datetime
+import hashlib
 import json
 import logging
 import os
+import re
 import sys
 
 logging.basicConfig(level=logging.INFO, format='%(levelname)s: %(message)s')
 log = logging.getLogger(__name__)
 
-# ISO 3166-1 alpha-3 to numeric mapping (matching world-atlas topojson)
+OUTPUT_PATH = 'js/co2data.js'
+BUDGET_BASE_YEAR = 2020   # the IPCC budgets count from here (BUDGET_BASE_YEAR in js/config.js)
+MIN_COUNTRIES = 150   # fewer than this means the file or the matching is broken
+SOURCE_URL = 'https://github.com/owid/co2-data'
+
+# ISO 3166-1 alpha-3 to numeric mapping (matching the world-atlas TopoJSON ids)
 ISO_A3_TO_NUM = {
     'AFG':'004','ALB':'008','DZA':'012','ASM':'016','AND':'020','AGO':'024','ATG':'028',
     'ARG':'032','ARM':'051','AUS':'036','AUT':'040','AZE':'031','BHS':'044','BHR':'048',
@@ -46,22 +70,20 @@ ISO_A3_TO_NUM = {
     'AIA':'660','MSR':'500','COK':'184','NIU':'570','TKL':'772',
     'WSM':'882','TON':'776','PLW':'585','MHL':'584','NRU':'520','TUV':'798',
     'KNA':'659','LCA':'662','VCT':'670','GRD':'308',
-    'XKX':'383',
-    'HKG':'344','MAC':'446','LIE':'438','MCO':'492','SMR':'674','STP':'678','SYC':'690'
+    'HKG':'344','MAC':'446','LIE':'438','MCO':'492','SMR':'674','STP':'678','SYC':'690',
+    # OWID uses its own code for Kosovo. The world-atlas shape has no numeric
+    # id, so the app identifies it by name.
+    'OWID_KOS': 'Kosovo',
 }
 
-# Known non-country entries in OWID data to skip
-SKIP_ENTITIES = {
-    'World', 'Africa', 'Asia', 'Europe', 'North America', 'South America', 'Oceania',
-    'High-income countries', 'Low-income countries', 'Lower-middle-income countries',
-    'Upper-middle-income countries', 'European Union (27)', 'Asia (excl. China and India)',
-    'Europe (excl. EU-27)', 'Europe (excl. EU-28)', 'North America (excl. USA)',
-    'International transport', 'Kuwaiti Oil Fires', 'Statistical discrepancy',
-    'OWID_WRL', 'OWID_AFR', 'OWID_ASI', 'OWID_EUR', 'OWID_NAM', 'OWID_SAM', 'OWID_OCE',
-}
+# OWID_ codes that are real places rather than aggregates
+OWID_COUNTRY_CODES = {'OWID_KOS'}
+
+FIELDS = ('population', 'co2', 'consumption_co2', 'cumulative_co2')
+
 
 def safe_float(val):
-    """Convert string to float, return None if empty or invalid."""
+    """Convert a CSV cell to float; empty or invalid cells become None."""
     if val is None or val.strip() == '':
         return None
     try:
@@ -69,243 +91,269 @@ def safe_float(val):
     except ValueError:
         return None
 
-def main():
-    csv_path = 'owid-co2-data.csv'
-    output_path = 'js/co2data.js'
 
-    if not os.path.isfile(csv_path):
-        log.error(f"Input file not found: {csv_path}")
-        sys.exit(1)
+def sha256_of(path):
+    digest = hashlib.sha256()
+    with open(path, 'rb') as f:
+        for chunk in iter(lambda: f.read(1 << 20), b''):
+            digest.update(chunk)
+    return digest.hexdigest()
 
-    # Read CSV
-    rows = {}
-    world_row_2023 = None
-    
+
+def read_rows(csv_path, years, world_years):
+    """Return ({(iso, year): row}, {year: world_row}): countries for `years`,
+    the World row for `world_years`."""
+    rows, world = {}, {}
     with open(csv_path, 'r', encoding='utf-8') as f:
-        reader = csv.DictReader(f)
-        for row in reader:
+        for row in csv.DictReader(f):
+            year = row.get('year', '').strip()
             iso = row.get('iso_code', '').strip()
             country = row.get('country', '').strip()
-            year = row.get('year', '').strip()
-            
-            if not year:
-                continue
-            
-            # Store World row for totals (iso_code may be empty for World)
             if country == 'World':
-                if year == '2023':
-                    world_row_2023 = row
+                if year in world_years:
+                    world[year] = row
                 continue
-            
+            if year not in years:
+                continue
             if not iso:
+                continue  # continents, income groups and other aggregates
+            if iso.startswith('OWID_') and iso not in OWID_COUNTRY_CODES:
                 continue
-            
-            # Skip aggregates and non-countries
-            if iso.startswith('OWID_') or country in SKIP_ENTITIES:
+            rows[(iso, year)] = row
+    return rows, world
+
+
+def latest_complete_year(csv_path):
+    """The newest year with a World total and emissions for most countries."""
+    world, countries = set(), {}
+    with open(csv_path, 'r', encoding='utf-8') as f:
+        for row in csv.DictReader(f):
+            if not safe_float(row.get('co2')):
                 continue
-            
-            key = (iso, year)
-            rows[key] = row
-    
-    # Build country data
-    countries = {}
-    matched = 0
-    unmatched_isos = []
-    
-    # Get all unique ISO codes from the data
-    all_isos = set()
-    for (iso, year) in rows:
-        all_isos.add(iso)
-    
-    for iso in sorted(all_isos):
-        num = ISO_A3_TO_NUM.get(iso)
-        if not num:
-            unmatched_isos.append(iso)
+            year = row.get('year', '').strip()
+            if row.get('country', '').strip() == 'World':
+                if safe_float(row.get('population')):
+                    world.add(year)
+            elif row.get('iso_code', '').strip():
+                countries[year] = countries.get(year, 0) + 1
+    complete = [int(y) for y in world if countries.get(y, 0) >= MIN_COUNTRIES]
+    if not complete:
+        raise ValueError('No year in the CSV has a World total and enough countries')
+    return max(complete)
+
+
+def read_existing(path):
+    """(meta, countries, world_totals) of the data file in place, or None."""
+    try:
+        text = open(path, 'r', encoding='utf-8').read()
+        meta = json.loads(re.search(r'^const DATA_META = (.*);$', text, re.M).group(1))
+        world_totals = json.loads(re.search(r'^const WORLD_TOTALS = (.*);$', text, re.M).group(1))
+        body = re.search(r'^const CO2_DATA = \{\n(.*?)\n\};$', text, re.M | re.S).group(1)
+        countries = json.loads('{' + body.rstrip().rstrip(',') + '}')
+        return meta, countries, world_totals
+    except (OSError, AttributeError, ValueError):
+        return None
+
+
+def latest_value(rows, iso, field, years):
+    """Newest available value of one field, looking back year by year."""
+    for year in years:
+        row = rows.get((iso, year))
+        if row:
+            value = safe_float(row.get(field))
+            if value is not None:
+                return value
+    return None
+
+
+def build_countries(rows, years):
+    countries, unmatched = {}, []
+    for iso in sorted({iso for iso, _ in rows}):
+        key = ISO_A3_TO_NUM.get(iso)
+        if not key:
+            unmatched.append(iso)
             continue
-        
-        # Prefer 2023, fall back to 2022
-        row = rows.get((iso, '2023')) or rows.get((iso, '2022'))
-        if not row:
-            continue
-        
-        name = row['country']
-        pop = safe_float(row.get('population'))
-        co2 = safe_float(row.get('co2'))
-        
-        # consumption: try 2022 first (latest available for most), then 2023
-        cons_row = rows.get((iso, '2022')) or rows.get((iso, '2023'))
-        cons = safe_float(cons_row.get('consumption_co2')) if cons_row else None
-        
-        # If 2023 has consumption data, prefer it
-        row_2023 = rows.get((iso, '2023'))
-        if row_2023:
-            cons_2023 = safe_float(row_2023.get('consumption_co2'))
-            if cons_2023 is not None:
-                cons = cons_2023
-        
-        # cumulative_co2 - use latest year available
-        hist = safe_float(row.get('cumulative_co2'))
-        
+        name = next(rows[(iso, y)]['country'] for y in years if (iso, y) in rows)
+        pop = latest_value(rows, iso, 'population', years)
+        co2 = latest_value(rows, iso, 'co2', years)
+        cons = latest_value(rows, iso, 'consumption_co2', years)
+        hist = latest_value(rows, iso, 'cumulative_co2', years)
         if pop is None and co2 is None:
             continue
-        
-        # Convert population to millions
-        pop_m = round(pop / 1e6, 3) if pop else None
-        # co2 is already in Mt in OWID
-        co2_mt = round(co2, 3) if co2 is not None else None
-        # consumption is in Mt
-        cons_mt = round(cons, 3) if cons is not None else None
-        # cumulative is in Mt, convert to Gt (divide by 1000)
-        hist_gt = round(hist / 1000, 3) if hist is not None else None
-        
-        countries[num] = {
+        countries[key] = {
             'name': name,
-            'pop': pop_m,
-            'co2': co2_mt,
-            'cons': cons_mt,
-            'hist': hist_gt
+            'pop': round(pop / 1e6, 3) if pop else None,          # millions
+            'co2': round(co2, 3) if co2 is not None else None,     # Mt
+            'cons': round(cons, 3) if cons is not None else None,  # Mt
+            'hist': round(hist / 1000, 3) if hist is not None else None,  # Gt
         }
-        matched += 1
-    
-    # World totals from OWID
-    world_pop = safe_float(world_row_2023.get('population')) if world_row_2023 else None
-    world_co2 = safe_float(world_row_2023.get('co2')) if world_row_2023 else None
-    world_cons = safe_float(world_row_2023.get('consumption_co2')) if world_row_2023 else None
-    world_hist = safe_float(world_row_2023.get('cumulative_co2')) if world_row_2023 else None
-    
-    world_totals = {
-        'pop': round(world_pop / 1e6, 3) if world_pop else 8045.311,
-        'co2': round(world_co2, 3) if world_co2 else 37550.0,
-        'cons': round(world_cons, 3) if world_cons else 37550.0,
-        'hist': round(world_hist / 1000, 3) if world_hist else 1740.0
+    return countries, unmatched
+
+
+def build_world_totals(world, year):
+    row = world.get(year)
+    if not row:
+        raise ValueError(f"No 'World' row for {year} in the CSV")
+    pop = safe_float(row.get('population'))
+    co2 = safe_float(row.get('co2'))
+    hist = safe_float(row.get('cumulative_co2'))
+    missing = [n for n, v in (('population', pop), ('co2', co2), ('cumulative_co2', hist)) if not v]
+    if missing:
+        raise ValueError(f"World row for {year} is missing: {', '.join(missing)}")
+    # Globally, consumption equals production; OWID leaves the cell empty
+    # in some releases.
+    cons = safe_float(row.get('consumption_co2')) or co2
+
+    # What the world has emitted since the IPCC budgets started counting,
+    # up to and including the data year. The site subtracts this from them.
+    emitted = 0
+    for y in range(BUDGET_BASE_YEAR, int(year) + 1):
+        value = safe_float(world.get(str(y), {}).get('co2'))
+        if not value:
+            raise ValueError(f'World row for {y} has no co2 value')
+        emitted += value
+
+    return {
+        'pop': round(pop / 1e6, 3),
+        'co2': round(co2, 3),
+        'cons': round(cons, 3),
+        'hist': round(hist / 1000, 3),
+        'emittedSince2020': round(emitted / 1000, 1),
     }
-    
-    log.info(f"Matched {matched} countries to ISO numeric codes")
-    if unmatched_isos:
-        log.warning(f"Unmatched ISO codes ({len(unmatched_isos)}): {unmatched_isos}")
-    log.info(f"World totals: {world_totals}")
-    
-    # Check a few key countries
-    for num, name in [('840', 'USA'), ('156', 'China'), ('356', 'India'), ('643', 'Russia'), ('276', 'Germany')]:
-        c = countries.get(num)
-        if c:
-            log.info(f"  {name}: pop={c['pop']}M, co2={c['co2']}Mt, cons={c['cons']}, hist={c['hist']}Gt")
-    
-    # Generate JS file
-    js_lines = []
-    js_lines.append('// CO2 emissions data from Our World in Data (Global Carbon Project)')
-    js_lines.append('// Source: https://github.com/owid/co2-data')
-    js_lines.append('// Data year: 2023 (consumption-based: latest available, mostly 2022)')
-    js_lines.append('// Generated from owid-co2-data.csv')
-    js_lines.append('//')
-    js_lines.append('// Units:')
-    js_lines.append('//   pop  = population in millions')
-    js_lines.append('//   co2  = territorial CO2 emissions in Mt (million tonnes)')
-    js_lines.append('//   cons = consumption-based CO2 emissions in Mt (null if unavailable)')
-    js_lines.append('//   hist = cumulative CO2 emissions 1750-2023 in Gt (gigatonnes)')
-    js_lines.append('')
-    js_lines.append('const CO2_DATA = {')
-    
-    for num in sorted(countries.keys()):
-        c = countries[num]
-        name_esc = c['name'].replace("'", "\\'")
-        pop_str = str(c['pop']) if c['pop'] is not None else 'null'
-        co2_str = str(c['co2']) if c['co2'] is not None else 'null'
-        cons_str = str(c['cons']) if c['cons'] is not None else 'null'
-        hist_str = str(c['hist']) if c['hist'] is not None else 'null'
-        js_lines.append(f"  \"{num}\": {{ name: '{name_esc}', pop: {pop_str}, co2: {co2_str}, cons: {cons_str}, hist: {hist_str} }},")
-    
-    js_lines.append('};')
-    js_lines.append('')
-    
-    # World totals
-    js_lines.append('const WORLD_TOTALS = {')
-    js_lines.append(f"  pop: {world_totals['pop']},   // millions")
-    js_lines.append(f"  population: {world_totals['pop']}, // alias for pop (used by info panel)")
-    js_lines.append(f"  co2: {world_totals['co2']},  // Mt")
-    js_lines.append(f"  cons: {world_totals['cons']}, // Mt (consumption ≈ territorial globally)")
-    js_lines.append(f"  hist: {world_totals['hist']}   // Gt")
-    js_lines.append('};')
-    js_lines.append('')
-    
-    # Helper functions (same API as before)
-    js_lines.append('function getWorldPerCapita(metric = "co2") {')
-    js_lines.append('  if (metric === "hist") return WORLD_TOTALS.hist / WORLD_TOTALS.pop;')
-    js_lines.append('  const key = metric === "cons" ? "cons" : "co2";')
-    js_lines.append('  return WORLD_TOTALS[key] / WORLD_TOTALS.pop;')
-    js_lines.append('}')
-    js_lines.append('')
-    js_lines.append('function getBudgetRatio(isoCode, metric = "co2") {')
-    js_lines.append('  const d = CO2_DATA[isoCode];')
-    js_lines.append('  if (!d || !d.pop) return null;')
-    js_lines.append('  let val;')
-    js_lines.append('  if (metric === "hist") {')
-    js_lines.append('    val = d.hist;')
-    js_lines.append('  } else if (metric === "cons") {')
-    js_lines.append('    val = d.cons != null ? d.cons : d.co2;')
-    js_lines.append('  } else {')
-    js_lines.append('    val = d.co2;')
-    js_lines.append('  }')
-    js_lines.append('  if (val == null) return null;')
-    js_lines.append('  const perCapita = val / d.pop;')
-    js_lines.append('  const worldPC = getWorldPerCapita(metric);')
-    js_lines.append('  return perCapita / worldPC;')
-    js_lines.append('}')
-    js_lines.append('')
-    js_lines.append("function getCountryStats(isoCode, metric = 'co2') {")
-    js_lines.append('  const d = CO2_DATA[isoCode];')
-    js_lines.append('  if (!d) return null;')
-    js_lines.append("  const ratio = getBudgetRatio(isoCode, metric);")
-    js_lines.append('  let metricPerCapita = null;')
-    js_lines.append("  if (metric === 'hist' && d.hist != null && d.pop) {")
-    js_lines.append('    metricPerCapita = (d.hist * 1000) / d.pop; // Gt->Mt for per-capita')
-    js_lines.append("  } else if (metric === 'cons') {")
-    js_lines.append('    const val = d.cons != null ? d.cons : d.co2;')
-    js_lines.append('    if (val != null && d.pop) metricPerCapita = val / d.pop;')
-    js_lines.append('  } else {')
-    js_lines.append('    if (d.co2 != null && d.pop) metricPerCapita = d.co2 / d.pop;')
-    js_lines.append('  }')
-    js_lines.append('  return {')
-    js_lines.append('    name: d.name,')
-    js_lines.append('    population: d.pop,')
-    js_lines.append('    co2: d.co2,')
-    js_lines.append('    cons: d.cons,')
-    js_lines.append('    hist: d.hist,')
-    js_lines.append('    consumption: d.cons,')
-    js_lines.append('    historical: d.hist,')
-    js_lines.append('    ratio: ratio,')
-    js_lines.append('    metricPerCapita: metricPerCapita,')
-    js_lines.append('    co2PerCapita: d.co2 && d.pop ? +(d.co2 / d.pop).toFixed(4) : null,')
-    js_lines.append('    consPerCapita: d.cons != null && d.pop ? +(d.cons / d.pop).toFixed(4) : null,')
-    js_lines.append('    histPerCapita: d.hist != null && d.pop ? +(d.hist / d.pop).toFixed(6) : null')
-    js_lines.append('  };')
-    js_lines.append('}')
-    js_lines.append('')
-    
-    with open(output_path, 'w', encoding='utf-8') as f:
-        f.write('\n'.join(js_lines))
-    
-    # Output validation
+
+
+def render_js(countries, world_totals, meta):
+    """Render the data file. Values are JSON, so any name is escaped safely."""
+    dump = lambda value: json.dumps(value, ensure_ascii=False)
+    lines = [
+        '// GENERATED FILE. Do not edit by hand; run `python generate_data.py` instead.',
+        '//',
+        '// CO2 emissions data from Our World in Data (Global Carbon Project)',
+        f'// Source: {SOURCE_URL}',
+        '//',
+        '// Units:',
+        '//   pop  = population in millions',
+        '//   co2  = territorial CO2 emissions in Mt (million tonnes)',
+        '//   cons = consumption-based CO2 emissions in Mt (null if unavailable)',
+        '//   hist = cumulative CO2 emissions since 1750 in Gt (gigatonnes)',
+        '//   emittedSince2020 = world CO2 emissions from 2020 to the data year in Gt',
+        '//',
+        '// Each value is the newest one available up to the data year.',
+        '// WORLD_TOTALS is the OWID "World" row. It includes international aviation',
+        '// and shipping, which are not attributed to any country.',
+        '',
+        f'const DATA_META = {dump(meta)};',
+        '',
+        'const CO2_DATA = {',
+    ]
+    for key in sorted(countries):
+        lines.append(f'  {dump(key)}: {dump(countries[key])},')
+    lines += [
+        '};',
+        '',
+        f'const WORLD_TOTALS = {dump(world_totals)};',
+        '',
+    ]
+    return '\n'.join(lines)
+
+
+def validate(countries, world_totals):
     errors = []
-    if matched < 150:
-        errors.append(f"Only {matched} countries matched (expected 150+)")
-    if world_totals['co2'] <= 0:
-        errors.append("World CO2 total is zero or negative")
-    if world_totals['pop'] <= 0:
-        errors.append("World population total is zero or negative")
-    # Spot-check: major countries must be present
-    for num, name in [('840', 'USA'), ('156', 'China'), ('356', 'India')]:
-        if num not in countries:
-            errors.append(f"Missing major country: {name} ({num})")
-        elif countries[num]['co2'] is None:
-            errors.append(f"Missing CO2 data for {name}")
-    
+    if len(countries) < MIN_COUNTRIES:
+        errors.append(f'Only {len(countries)} countries matched (expected {MIN_COUNTRIES}+)')
+    for key, label in (('840', 'USA'), ('156', 'China'), ('356', 'India')):
+        if key not in countries:
+            errors.append(f'Missing major country: {label} ({key})')
+        elif countries[key]['co2'] is None:
+            errors.append(f'Missing CO2 data for {label}')
+    country_sum = sum(c['co2'] or 0 for c in countries.values())
+    if not 0.85 * world_totals['co2'] <= country_sum <= 1.02 * world_totals['co2']:
+        errors.append(
+            f"Country emissions add up to {country_sum:.0f} Mt, "
+            f"but the world total is {world_totals['co2']:.0f} Mt"
+        )
+    return errors
+
+
+def main():
+    parser = argparse.ArgumentParser(description=__doc__.strip().splitlines()[0])
+    parser.add_argument('csv', nargs='?', default='owid-co2-data.csv',
+                        help='path to owid-co2-data.csv (default: ./owid-co2-data.csv)')
+    parser.add_argument('--year', type=int, default=None,
+                        help='data year (default: the newest complete year in the file); '
+                             'older values are used where this year is empty')
+    parser.add_argument('--force', action='store_true',
+                        help='write even an older year or far fewer countries than before')
+    args = parser.parse_args()
+
+    if not os.path.isfile(args.csv):
+        log.error(f'Input file not found: {args.csv}')
+        log.error(f'Download it from {SOURCE_URL}')
+        sys.exit(1)
+
+    if args.year is None:
+        try:
+            args.year = latest_complete_year(args.csv)
+        except ValueError as err:
+            log.error(str(err))
+            sys.exit(1)
+        log.info(f'Newest complete year in the file: {args.year}')
+
+    # Look back up to two years for cells the data year does not have yet
+    # (consumption-based data usually lags a year behind).
+    years = [str(args.year - offset) for offset in range(3)]
+    world_years = {str(y) for y in range(BUDGET_BASE_YEAR, args.year + 1)}
+    rows, world = read_rows(args.csv, set(years), world_years)
+    countries, unmatched = build_countries(rows, years)
+
+    try:
+        world_totals = build_world_totals(world, years[0])
+    except ValueError as err:
+        log.error(str(err))
+        sys.exit(1)
+
+    errors = validate(countries, world_totals)
     if errors:
         for err in errors:
             log.error(err)
         sys.exit(1)
-    
-    log.info(f"Generated {output_path} with {matched} countries")
+
+    existing = read_existing(OUTPUT_PATH)
+    if existing:
+        old_meta, old_countries, old_world = existing
+        if (old_meta.get('dataYear') == args.year and old_countries == countries
+                and old_world == world_totals):
+            log.info(f'No change: {OUTPUT_PATH} already has this data ({args.year})')
+            return
+        problems = []
+        if old_meta.get('dataYear', 0) > args.year:
+            problems.append(f"data year would go back from {old_meta['dataYear']} to {args.year}")
+        if len(countries) < 0.95 * len(old_countries):
+            problems.append(f'countries would drop from {len(old_countries)} to {len(countries)}')
+        if problems and not args.force:
+            for problem in problems:
+                log.error(f'Refusing to write: {problem} (use --force to write anyway)')
+            sys.exit(1)
+
+    meta = {
+        'dataYear': args.year,
+        'generated': datetime.date.today().isoformat(),
+        'sourceFile': os.path.basename(args.csv),
+        'sourceSha256': sha256_of(args.csv),
+    }
+    with open(OUTPUT_PATH, 'w', encoding='utf-8', newline='\n') as f:
+        f.write(render_js(countries, world_totals, meta))
+
+    log.info(f'Matched {len(countries)} countries')
+    if unmatched:
+        log.warning(f'ISO codes without a map shape ({len(unmatched)}): {unmatched}')
+    log.info(f'World totals: {world_totals}')
+    for key, label in (('840', 'USA'), ('156', 'China'), ('356', 'India'), ('276', 'Germany')):
+        c = countries.get(key)
+        if c:
+            log.info(f"  {label}: pop={c['pop']}M, co2={c['co2']}Mt, cons={c['cons']}Mt, hist={c['hist']}Gt")
+    log.info(f'Wrote {OUTPUT_PATH}')
+
 
 if __name__ == '__main__':
     main()

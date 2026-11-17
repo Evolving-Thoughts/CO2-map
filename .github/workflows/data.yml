@@ -1,0 +1,76 @@
+# Checks once a week whether Our World in Data has published newer CO2
+# data. If so, js/co2data.js is regenerated, committed and published.
+#
+# generate_data.py refuses to write data that looks broken (no World total,
+# too few countries, an older year). The run then fails and GitHub sends a
+# mail, and the site keeps the data it has.
+#
+# The remaining Paris budget follows the data: what has been emitted since
+# 2020 is part of js/co2data.js. Not updated here: the assumptions in
+# js/config.js and the preview image (og-image.png, see README).
+
+name: Update data
+
+on:
+  schedule:
+    - cron: '17 5 * * 1'   # Mondays, 05:17 UTC
+  workflow_dispatch:
+
+permissions:
+  contents: write   # commit the new data
+  actions: write    # keep the schedule enabled (last step)
+
+concurrency:
+  group: data-update
+
+jobs:
+  update:
+    runs-on: ubuntu-latest
+    outputs:
+      changed: ${{ steps.commit.outputs.changed }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Download the dataset
+        run: |
+          curl -fsSL --retry 3 --max-time 300 -o owid-co2-data.csv \
+            https://owid-public.owid.io/data/co2/owid-co2-data.csv
+
+      - name: Regenerate js/co2data.js
+        run: python3 generate_data.py owid-co2-data.csv
+
+      - id: commit
+        name: Commit if the data changed
+        run: |
+          if git diff --quiet -- js/co2data.js; then
+            echo "No newer data."
+            echo "changed=false" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+          year=$(grep -oE '"dataYear": [0-9]+' js/co2data.js | grep -oE '[0-9]+$')
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add js/co2data.js
+          git commit -m "Update data to ${year} (Our World in Data)"
+          git push
+          echo "changed=true" >> "$GITHUB_OUTPUT"
+
+      # GitHub switches scheduled workflows off after 60 days without
+      # activity in the repository. Enabling the workflow again counts as
+      # activity for this purpose.
+      - name: Keep the schedule enabled
+        if: always()
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: gh api -X PUT "repos/${{ github.repository }}/actions/workflows/data.yml/enable"
+
+  # A commit made by a workflow does not start other workflows, so the
+  # site is published from here.
+  publish:
+    needs: update
+    if: needs.update.outputs.changed == 'true'
+    permissions:
+      contents: read
+      pages: write
+      id-token: write
+    uses: ./.github/workflows/pages.yml

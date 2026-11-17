@@ -1,1 +1,9 @@
 owid-co2-data.csv
+
+# Impeccable skill (lokal installiert, nicht versioniert)
+.claude/skills/impeccable/
+.claude/agents/impeccable-*.md
+
+# Lokale Vorschau für Claude (Testserver ohne Cache, Startkonfiguration)
+.claude/launch.json
+.claude/dev_server.py
