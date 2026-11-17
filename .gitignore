@@ -4,6 +4,7 @@ owid-co2-data.csv
 .claude/skills/impeccable/
 .claude/agents/impeccable-*.md
 
-# Lokale Vorschau für Claude (Testserver ohne Cache, Startkonfiguration)
+# Lokale Einstellungen und Vorschau für Claude (Testserver ohne Cache, Startkonfiguration)
+.claude/settings.local.json
 .claude/launch.json
 .claude/dev_server.py
